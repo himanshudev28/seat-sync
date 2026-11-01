@@ -1,4 +1,5 @@
 import type { Config } from "tailwindcss";
+import tailwindcssAnimate from "tailwindcss-animate";
 
 export default {
 	darkMode: ["class"],
@@ -25,9 +26,14 @@ export default {
 		extend: {
 			colors: {
 				/* ── Semantic design tokens ── */
+				/* redesign.md §1 tokens, mapped so there is ONE system: prefer the shadcn names
+				   (bg-background, bg-card, text-muted-foreground, bg-primary…); these add what shadcn lacks.
+				   AA-checked values live in src/index.css. */
 				coral: {
 					DEFAULT: 'var(--accent-primary)',
 					hover: 'var(--accent-hover)',
+					fg: 'var(--accent-fg)',        /* text on coral (white light / ink dark) */
+					decor: 'var(--coral-decor)',   /* decoration only, never text */
 					muted: 'var(--accent-muted)',
 					bg: 'var(--accent-bg)',
 				},
@@ -36,6 +42,14 @@ export default {
 					secondary: 'var(--bg-secondary)',
 					elevated: 'var(--bg-elevated)',
 				},
+				glass: 'var(--bg-glass)',
+				seat: {
+					premium: 'rgb(var(--seat-premium) / <alpha-value>)',
+					standard: 'rgb(var(--seat-standard) / <alpha-value>)',
+					economy: 'rgb(var(--seat-economy) / <alpha-value>)',
+				},
+				success: 'hsl(var(--success) / <alpha-value>)',
+				warning: 'hsl(var(--warning) / <alpha-value>)',
 				border: 'hsl(var(--border))',
 				input: 'hsl(var(--input))',
 				ring: 'hsl(var(--ring))',
@@ -79,6 +93,15 @@ export default {
 					border: 'hsl(var(--sidebar-border))',
 					ring: 'hsl(var(--sidebar-ring))'
 				}
+			},
+			/* Type scale (redesign.md §2). Pair with font-display / font-sans / font-mono. */
+			fontSize: {
+				display: ['clamp(2.5rem, 6vw, 4.5rem)', { lineHeight: '1.1', letterSpacing: '-0.02em', fontWeight: '700' }],
+				section: ['clamp(1.75rem, 3vw, 2.5rem)', { lineHeight: '1.2', fontWeight: '600' }],
+				'card-title': ['1.25rem', { lineHeight: '1.4', fontWeight: '600' }],
+				label: ['0.875rem', { lineHeight: '1.25rem', letterSpacing: '0.05em', fontWeight: '500' }],
+				data: ['1.125rem', { lineHeight: '1.5rem', fontWeight: '700' }],
+				'data-lg': ['1.5rem', { lineHeight: '2rem', fontWeight: '700' }],
 			},
 			borderRadius: {
 				'2xl': '1rem',
@@ -131,6 +154,10 @@ export default {
 				'shimmer': {
 					'0%':   { backgroundPosition: '-200% 0' },
 					'100%': { backgroundPosition: '200% 0' }
+				},
+				'seat-pop': {
+					'0%':   { transform: 'scale(0.86)' },
+					'100%': { transform: 'scale(1)' }
 				}
 			},
 			animation: {
@@ -144,9 +171,11 @@ export default {
 				'slide-bar': 'slide-bar 1.5s ease-in-out infinite',
 				'fadeIn': 'fadeIn 0.45s cubic-bezier(0.22,1,0.36,1) both',
 				'fadeInScale': 'fadeInScale 0.4s cubic-bezier(0.22,1,0.36,1) both',
-				'shimmer': 'shimmer 1.8s linear infinite'
+				'shimmer': 'shimmer 1.8s linear infinite',
+				/* Seat map: a seat being picked settles with a tiny overshoot (disabled under reduced motion). */
+				'seat-pop': 'seat-pop 220ms cubic-bezier(0.34,1.56,0.64,1)'
 			}
 		}
 	},
-	plugins: [require("tailwindcss-animate")],
+	plugins: [tailwindcssAnimate],
 } satisfies Config;
