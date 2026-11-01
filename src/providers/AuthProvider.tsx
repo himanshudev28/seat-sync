@@ -1,5 +1,11 @@
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
+import { useQueryClient } from "@tanstack/react-query";
+import { AUTH_EXPIRED_EVENT } from "@/lib/api";
 
-import { createContext, useContext, useEffect, useState, useMemo, useCallback } from "react";
+/**
+ * Auth state comes from the server: the HttpOnly `ss_session` cookie is sent automatically and
+ * `GET /api/auth/me` says who we are. Nothing auth-related is kept in localStorage.
+ */
 
 type User = {
   id: string;
@@ -22,142 +28,164 @@ type AuthContextType = {
   session: null;
   user: User | null;
   profile: Profile | null;
+  /** True until the first /me answer (or a network failure) on page load. */
   isLoading: boolean;
   signOut: () => Promise<void>;
+  /** After login/register: use the user the endpoint returned (the cookie is already set). */
+  setSessionUser: (rawUser: Record<string, unknown>) => void;
+  /** Re-read the session from /me (after profile edits, OAuth callback, etc.). True when signed in. */
+  refresh: () => Promise<boolean>;
+  /** @deprecated The token is ignored: the session is the cookie. Use setSessionUser. */
   loginWithToken: (token: string, rawUser: Record<string, unknown>) => void;
 };
 
-// Safe localStorage wrappers – Safari Private Mode throws QuotaExceededError
-function lsGet(key: string): string | null {
-  try { return localStorage.getItem(key); } catch { return null; }
-}
-function lsSet(key: string, value: string): void {
-  try { localStorage.setItem(key, value); } catch { /* no-op in Safari private */ }
-}
-function lsRemove(key: string): void {
-  try { localStorage.removeItem(key); } catch { /* no-op in Safari private */ }
-}
+const LEGACY_TOKEN_KEY = "auth_token";
+const CHANNEL = "seatsync-auth";
 
-const AuthContext = createContext<AuthContextType>({
-  session: null,
-  user: null,
-  profile: null,
-  isLoading: true,
-  signOut: async () => {},
-  loginWithToken: () => {},
-});
+const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
-async function fetchCurrentUser(
-  token: string
-): Promise<{ user: User; profile: Profile } | null> {
-  try {
-    const res = await fetch("/api/auth/me", {
-      headers: { Authorization: `Bearer ${token}` },
-    });
-    if (!res.ok) return null;
-    const data = await res.json();
-    const id: string = data.id ?? data._id ?? "";
-    const user: User = { id, email: data.email };
-    const profile: Profile = {
+function toState(raw: Record<string, unknown>): { user: User; profile: Profile } {
+  const id = String(raw.id ?? raw._id ?? "");
+  const str = (k: string) => (typeof raw[k] === "string" ? (raw[k] as string) : null);
+  return {
+    user: { id, email: str("email") ?? "" },
+    profile: {
       id,
-      first_name: data.first_name ?? null,
-      last_name: data.last_name ?? null,
-      email: data.email ?? null,
-      avatar_url: data.avatar_url ?? null,
-      is_admin: data.is_admin ?? false,
-      student_id: data.student_id ?? null,
-      course: data.course ?? null,
-      phone_number: data.phone_number ?? null,
-    };
-    return { user, profile };
+      first_name: str("first_name"),
+      last_name: str("last_name"),
+      email: str("email"),
+      avatar_url: str("avatar_url"),
+      is_admin: raw.is_admin === true,
+      student_id: str("student_id"),
+      course: str("course"),
+      phone_number: str("phone_number"),
+    },
+  };
+}
+
+type MeResult = { kind: "user"; raw: Record<string, unknown> } | { kind: "anon" } | { kind: "error" };
+
+async function fetchMe(signal?: AbortSignal): Promise<MeResult> {
+  try {
+    const res = await fetch("/api/auth/me", { credentials: "include", signal, cache: "no-store" });
+    if (res.status === 401) return { kind: "anon" };
+    if (!res.ok) return { kind: "error" };
+    const data = (await res.json()) as { user?: Record<string, unknown> } & Record<string, unknown>;
+    // `{user}` is the contract; accept the old flat shape during the rollout.
+    const raw = data.user ?? (data.email ? data : null);
+    return raw ? { kind: "user", raw } : { kind: "anon" };
   } catch {
-    return null;
+    return { kind: "error" };
   }
 }
 
 export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
+  const queryClient = useQueryClient();
   const [user, setUser] = useState<User | null>(null);
   const [profile, setProfile] = useState<Profile | null>(null);
   const [isLoading, setIsLoading] = useState(true);
+  const channel = useRef<BroadcastChannel | null>(null);
+  /** Bumped by every login/logout/refresh, so a slow initial /me can't overwrite a newer answer. */
+  const generation = useRef(0);
 
-  const loadFromToken = useCallback(async () => {
-    const token = lsGet("auth_token");
-    if (!token) {
-      setUser(null);
-      setProfile(null);
-      setIsLoading(false);
-      return;
-    }
-    const result = await fetchCurrentUser(token);
-    if (result) {
-      setUser(result.user);
-      setProfile(result.profile);
-    } else {
-      // Token is invalid or expired – clear it
-      lsRemove("auth_token");
-      setUser(null);
-      setProfile(null);
-    }
-    setIsLoading(false);
-  }, []);
-
-  // Called directly from Auth.tsx after login/register – avoids a full page
-  // reload and the extra /api/auth/me round-trip by using the data already
-  // returned by the login endpoint.
-  const loginWithToken = useCallback((token: string, rawUser: Record<string, unknown>) => {
-    lsSet("auth_token", token);
-    const id = String(rawUser.id ?? rawUser._id ?? "");
-    setUser({ id, email: String(rawUser.email ?? "") });
-    setProfile({
-      id,
-      first_name: (rawUser.first_name as string | null) ?? null,
-      last_name: (rawUser.last_name as string | null) ?? null,
-      email: (rawUser.email as string | null) ?? null,
-      avatar_url: (rawUser.avatar_url as string | null) ?? null,
-      is_admin: Boolean(rawUser.is_admin),
-      student_id: (rawUser.student_id as string | null) ?? null,
-      course: (rawUser.course as string | null) ?? null,
-      phone_number: (rawUser.phone_number as string | null) ?? null,
-    });
-    setIsLoading(false);
-  }, []);
-
-  useEffect(() => {
-    loadFromToken();
-
-    // Fallback: legacy callers can still dispatch "auth-change"
-    const handleAuthChange = () => loadFromToken();
-    window.addEventListener("auth-change", handleAuthChange);
-    return () => window.removeEventListener("auth-change", handleAuthChange);
-  }, [loadFromToken]);
-
-  const signOut = useCallback(async () => {
-    const token = lsGet("auth_token");
-    if (token) {
-      try {
-        await fetch("/api/auth/logout", {
-          method: "POST",
-          headers: { Authorization: `Bearer ${token}` },
-        });
-      } catch {
-        // JWT is stateless – discarding the token is sufficient even if the request fails
-      }
-    }
-    lsRemove("auth_token");
+  const clear = useCallback(() => {
     setUser(null);
     setProfile(null);
+    // Bookings, profile and admin data are per-user: never show them to the next person.
+    queryClient.clear();
+  }, [queryClient]);
+
+  const apply = useCallback((raw: Record<string, unknown>) => {
+    const s = toState(raw);
+    setUser(s.user);
+    setProfile(s.profile);
   }, []);
 
-  const value = useMemo(
-    () => ({ session: null as null, user, profile, isLoading, signOut, loginWithToken }),
-    [user, profile, isLoading, signOut, loginWithToken]
+  const refresh = useCallback(async () => {
+    const gen = ++generation.current;
+    const r = await fetchMe();
+    if (gen !== generation.current) return r.kind === "user";
+    if (r.kind === "user") apply(r.raw);
+    else if (r.kind === "anon") clear();
+    // "error" (offline, 5xx): keep the current state rather than signing the user out.
+    setIsLoading(false);
+    return r.kind === "user";
+  }, [apply, clear]);
+
+  useEffect(() => {
+    // Old builds kept a bearer token here; it is no longer used or trusted.
+    try {
+      localStorage.removeItem(LEGACY_TOKEN_KEY);
+    } catch {
+      /* Safari private mode */
+    }
+
+    const ctrl = new AbortController();
+    const gen = generation.current;
+    void fetchMe(ctrl.signal).then((r) => {
+      if (ctrl.signal.aborted || gen !== generation.current) return;
+      if (r.kind === "user") apply(r.raw);
+      setIsLoading(false);
+    });
+
+    // Another tab signed in or out: follow it.
+    if (typeof BroadcastChannel !== "undefined") {
+      channel.current = new BroadcastChannel(CHANNEL);
+      channel.current.onmessage = (e: MessageEvent) => {
+        if (e.data === "signed-out") clear();
+        else if (e.data === "signed-in") void refresh();
+      };
+    }
+
+    // A 401 from any API call (see lib/api) or a legacy "auth-change" event.
+    const onExpired = () => clear();
+    const onChange = () => void refresh();
+    window.addEventListener(AUTH_EXPIRED_EVENT, onExpired);
+    window.addEventListener("auth-change", onChange);
+    return () => {
+      ctrl.abort();
+      channel.current?.close();
+      channel.current = null;
+      window.removeEventListener(AUTH_EXPIRED_EVENT, onExpired);
+      window.removeEventListener("auth-change", onChange);
+    };
+  }, [apply, clear, refresh]);
+
+  const setSessionUser = useCallback(
+    (raw: Record<string, unknown>) => {
+      generation.current++;
+      apply(raw);
+      setIsLoading(false);
+      channel.current?.postMessage("signed-in");
+    },
+    [apply],
   );
 
-  return (
-    <AuthContext.Provider value={value}>
-      {children}
-    </AuthContext.Provider>
+  const loginWithToken = useCallback(
+    (_token: string, raw: Record<string, unknown>) => setSessionUser(raw),
+    [setSessionUser],
   );
+
+  const signOut = useCallback(async () => {
+    generation.current++;
+    try {
+      const res = await fetch("/api/auth/logout", { method: "POST", credentials: "include" });
+      // 204 expected. Anything else (e.g. a 403 from the Origin check) means the server session
+      // may still be alive: say so in the console; locally we still sign out.
+      if (!res.ok && res.status !== 401) console.warn(`[auth] logout returned ${res.status}`);
+    } catch {
+      // Offline: the cookie still expires server-side; clear locally either way.
+    }
+    clear();
+    channel.current?.postMessage("signed-out");
+  }, [clear]);
+
+  const value = useMemo<AuthContextType>(
+    () => ({ session: null, user, profile, isLoading, signOut, setSessionUser, refresh, loginWithToken }),
+    [user, profile, isLoading, signOut, setSessionUser, refresh, loginWithToken],
+  );
+
+  return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 };
 
 export const useAuth = () => {
