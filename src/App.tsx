@@ -1,14 +1,16 @@
 
 import { Toaster } from "@/components/ui/toaster";
-import { Toaster as Sonner } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { lazy, Suspense, useEffect } from "react";
-import { BrowserRouter, Routes, Route } from "react-router-dom";
+import { BrowserRouter, Routes, Route, useLocation } from "react-router-dom";
 import { ThemeProvider } from 'next-themes';
 import { AuthProvider } from "./providers/AuthProvider";
 import Index from "./pages/Index";
 import Header from "./components/Header";
+import ErrorBoundary from "./components/ErrorBoundary";
+import { RequireAdmin, RequireAuth } from "@/lib/auth/RequireAuth";
+import { DocumentTitle, RouteFocus } from "./shell";
 
 // Lazy-load every non-Index page. The dynamic-import factory is kept around
 // so we can warm its chunk during browser idle time (see warmRoutes below).
@@ -96,10 +98,14 @@ function useWarmRoutes() {
   }, []);
 }
 
-const AppWithLayout = () => (
+const AppWithLayout = () => {
+  const { pathname } = useLocation();
+  return (
   <div className="flex flex-col min-h-screen">
     <Header />
     <main className="flex-1 pt-20">
+      {/* A crash in one page keeps the header; keyed on the path so navigating away clears it. */}
+      <ErrorBoundary inline key={pathname}>
       <Suspense fallback={<PageFallback />}>
         <Routes>
           <Route path="/" element={<Index />} />
@@ -107,22 +113,24 @@ const AppWithLayout = () => (
           <Route path="/events/:id" element={<EventDetail />} />
           <Route path="/auth" element={<Auth />} />
           <Route path="/auth/callback" element={<AuthCallback />} />
-          <Route path="/profile" element={<Profile />} />
-          <Route path="/admin" element={<Admin />} />
-          <Route path="/admin/bookings" element={<AdminBookings />} />
+          <Route path="/profile" element={<RequireAuth><Profile /></RequireAuth>} />
+          <Route path="/admin" element={<RequireAdmin><Admin /></RequireAdmin>} />
+          <Route path="/admin/bookings" element={<RequireAdmin><AdminBookings /></RequireAdmin>} />
           <Route path="/admin-setup" element={<AdminSetup />} />
-          <Route path="/tickets" element={<MyTickets />} />
-          <Route path="/generate-ticket/:id" element={<TicketGenerator />} />
+          <Route path="/tickets" element={<RequireAuth><MyTickets /></RequireAuth>} />
+          <Route path="/generate-ticket/:id" element={<RequireAuth><TicketGenerator /></RequireAuth>} />
           <Route path="*" element={<NotFound />} />
         </Routes>
       </Suspense>
+      </ErrorBoundary>
     </main>
     <Suspense fallback={null}>
       <Analytics />
       <SpeedInsights />
     </Suspense>
   </div>
-);
+  );
+};
 
 const RouteWarmer = () => {
   useWarmRoutes();
@@ -135,19 +143,27 @@ const App = () => (
       <AuthProvider>
         <TooltipProvider>
           <Toaster />
-          <Sonner />
           <BrowserRouter>
             <RouteWarmer />
+            {/* Per-route document titles, and focus + announcement on navigation (a11y). */}
+            <DocumentTitle />
+            <RouteFocus />
             <Routes>
+              {/* Full-screen routes outside the layout: a crash (or a stale lazy chunk after a
+                  deploy) shows the recovery screen instead of a blank page. */}
               <Route path="/validate/:bookingId" element={
-                <Suspense fallback={null}>
-                  <ValidateTicket />
-                </Suspense>
+                <ErrorBoundary>
+                  <Suspense fallback={null}>
+                    <ValidateTicket />
+                  </Suspense>
+                </ErrorBoundary>
               } />
               <Route path="/scan" element={
-                <Suspense fallback={null}>
-                  <Scanner />
-                </Suspense>
+                <ErrorBoundary>
+                  <Suspense fallback={null}>
+                    <Scanner />
+                  </Suspense>
+                </ErrorBoundary>
               } />
               <Route path="*" element={<AppWithLayout />} />
             </Routes>
