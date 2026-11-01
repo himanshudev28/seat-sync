@@ -88,28 +88,35 @@ export default defineConfig(({ mode }) => {
       rollupOptions: {
         output: {
           manualChunks(id) {
+            // Vite's lazy-import helper is used by every chunk: keep it with React, never in a
+            // heavy route chunk (or the entry would statically pull that chunk in).
+            if (id.includes("vite/preload-helper") || id.includes("commonjsHelpers")) return "react-vendor";
             if (!id.includes("node_modules")) return;
 
-            // PDF + canvas — only on TicketGenerator, already dynamically imported.
-            // No React dependency, fully self-contained.
-            if (
-              id.includes("/jspdf/") ||
-              id.includes("/html2canvas/") ||
-              id.includes("/dompurify/")
-            ) return "pdf-vendor";
+            // React and the tiny libs everything shares get their own chunk. Before, Rollup put them
+            // in charts-vendor (recharts needs them), so the entry statically imported charts AND
+            // pdf: ~420 KB gzip on every page, hidden by trimPreloads (found by macapp-67). Every
+            // consumer imports this chunk statically, so React always evaluates first (no
+            // forwardRef-undefined crash).
+            if (/node_modules\/(react|react-dom|scheduler|react-is|prop-types|clsx|@babel\/runtime|tslib)\//.test(id)) {
+              return "react-vendor";
+            }
 
-            // QR code — Scanner + TicketGenerator only. No React dependency.
+            // PDF + canvas, with every jspdf dependency, so none of them lands in a shared chunk.
+            // Only TicketGenerator imports it, dynamically.
+            if (
+              /node_modules\/(jspdf|html2canvas|dompurify|fflate|canvg|pako|fast-png|iobuffer|core-js|raf|rgbcolor|stackblur-canvas|svg-pathdata|text-segmentation|css-line-break|utrie|base64-arraybuffer|performance-now)\//.test(id)
+            ) {
+              return "pdf-vendor";
+            }
+
+            // QR code: Scanner + TicketGenerator only.
             if (id.includes("/qrcode") || id.includes("/html5-qrcode/")) return "qr-vendor";
 
-            // Charts — used only on Admin. recharts pulls in d3-*, which is
-            // huge and unused elsewhere. recharts IS React-aware but Admin is
-            // lazy-loaded anyway so this chunk is only fetched on that route.
-            if (id.includes("/recharts/") || id.includes("/d3-")) return "charts-vendor";
+            // Charts: Admin only (lazy).
+            if (id.includes("/recharts/") || id.includes("/d3-") || id.includes("/victory-vendor/")) return "charts-vendor";
 
-            // Everything else (React, Radix, framer-motion, react-query, etc.)
-            // stays in the default chunks Vite generates per dynamic-import
-            // boundary. This preserves the React module binding across files
-            // and avoids the forwardRef-undefined crash.
+            // Everything else stays in the chunks Vite generates per dynamic-import boundary.
             return;
           },
         },
