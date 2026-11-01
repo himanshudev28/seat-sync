@@ -4,24 +4,25 @@ import User from '../../models/User.js';
 import Booking from '../../models/Booking.js';
 import { setCorsHeaders } from '../_utils/cors.js';
 import { requireAdmin } from '../_utils/auth.js';
+import { handleApiError } from '../_utils/http.js';
+import { clampInt } from '../_utils/validate.js';
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
-  setCorsHeaders(res);
+  setCorsHeaders(res, req);
   if (req.method === 'OPTIONS') return res.status(200).end();
   if (req.method !== 'GET') return res.status(405).json({ error: 'Method not allowed' });
 
-  await dbConnect();
-
   try {
-    requireAdmin(req);
+    await requireAdmin(req);
+    await dbConnect();
 
     const { page = '1', limit = '50' } = req.query;
-    const pageNum = parseInt(String(page), 10);
-    const limitNum = parseInt(String(limit), 10);
+    const pageNum = clampInt(page, 1, 1, 100000);
+    const limitNum = clampInt(limit, 50, 1, 100);
     const skip = (pageNum - 1) * limitNum;
 
     const [users, bookingCounts, total] = await Promise.all([
-      User.find({}).select('-password').skip(skip).limit(limitNum).lean(),
+      User.find({}).select('-password -token_version').sort({ created_at: -1, _id: 1 }).skip(skip).limit(limitNum).lean(),
       Booking.aggregate([
         { $group: { _id: '$user_id', count: { $sum: 1 } } },
       ]),
@@ -46,11 +47,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         totalPages: Math.ceil(total / limitNum),
       },
     });
-  } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : 'Internal server error';
-    if (message === 'Authentication required') return res.status(401).json({ error: message });
-    if (message === 'Admin access required') return res.status(403).json({ error: message });
-    console.error('[api/auth/users]', err);
-    return res.status(500).json({ error: message });
+  } catch (err) {
+    return handleApiError(res, err, '[api/auth/users]');
   }
 }

@@ -1,12 +1,15 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 import mongoose from 'mongoose';
 import dbConnect from '../../db.js';
+import { tierPrice } from '../../seatPricing.js';
 import Booking from '../../models/Booking.js';
 import BookingSeat from '../../models/BookingSeat.js';
 import Event from '../../models/Event.js';
 import Seat from '../../models/Seat.js';
 import { setCorsHeaders } from '../_utils/cors.js';
 import { requireAdmin } from '../_utils/auth.js';
+import { handleApiError } from '../_utils/http.js';
+import { objectId } from '../_utils/validate.js';
 
 function generateRowLetters(count: number): string[] {
   const letters: string[] = [];
@@ -75,10 +78,11 @@ export function buildSeatLayout(
     // heading on screen (with 10 rows, row D showed under "Front" but was
     // charged the middle-tier price).
     const sectionSize = Math.ceil(rowLetters.length / 3);
+    // Cinema pricing: front (nearest the screen) is cheapest, back costs more, balcony most.
     const tiers: Array<[string[], number]> = [
-      [rowLetters.slice(0, sectionSize), basePrice + 5],
-      [rowLetters.slice(sectionSize, sectionSize * 2), basePrice + 2],
-      [rowLetters.slice(sectionSize * 2), basePrice],
+      [rowLetters.slice(0, sectionSize), tierPrice(basePrice, 0)],
+      [rowLetters.slice(sectionSize, sectionSize * 2), tierPrice(basePrice, 1)],
+      [rowLetters.slice(sectionSize * 2), tierPrice(basePrice, 2)],
     ];
 
     for (const [tierRows, price] of tiers) {
@@ -106,14 +110,13 @@ export function buildSeatLayout(
 }
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
-  setCorsHeaders(res);
+  setCorsHeaders(res, req);
   if (req.method === 'OPTIONS') return res.status(200).end();
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
 
-  await dbConnect();
-
   try {
-    requireAdmin(req);
+    await requireAdmin(req);
+    await dbConnect();
 
     const { eventId, seatPrice, ...layoutInput } = req.body as LayoutRequest & {
       eventId: string;
@@ -134,9 +137,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       return res.status(400).json({ error: 'The requested layout has no seats' });
     }
 
-    if (!mongoose.Types.ObjectId.isValid(eventId)) {
-      return res.status(400).json({ error: 'Invalid eventId' });
-    }
+    objectId(eventId);
 
     // Make sure the event actually exists before we delete/cancel anything or
     // insert seats — a stale id would otherwise create orphaned seats.
@@ -172,11 +173,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       rows: layout.rows.length,
       columns: layout.columns,
     });
-  } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : 'Internal server error';
-    if (message === 'Authentication required') return res.status(401).json({ error: message });
-    if (message === 'Admin access required') return res.status(403).json({ error: message });
-    console.error('[api/seats/generate]', err);
-    return res.status(500).json({ error: message });
+  } catch (err) {
+    return handleApiError(res, err, '[api/seats/generate]');
   }
 }

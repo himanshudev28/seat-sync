@@ -8,21 +8,34 @@ import User from '../../models/User.js';
 import Event from '../../models/Event.js';
 import { setCorsHeaders } from '../_utils/cors.js';
 import { requireAdmin } from '../_utils/auth.js';
+import { badRequest, handleApiError, notFound } from '../_utils/http.js';
+import { clampInt, escapeRegex, objectId, str } from '../_utils/validate.js';
+import { BOOKING_STATUSES, setBookingStatus, type BookingStatus } from '../bookings/_status.js';
 
 // ── helpers ──────────────────────────────────────────────────────────────────
+
+function validDate(v: unknown): Date {
+  const d = new Date(String(v));
+  if (Number.isNaN(d.getTime())) throw badRequest('Invalid date');
+  return d;
+}
 
 function buildFilter(query: Record<string, unknown>) {
   const filter: Record<string, unknown> = {};
 
-  if (query.eventId) filter.event_id = query.eventId;
-  if (query.status) filter.status = query.status;
+  if (query.eventId) filter.event_id = objectId(query.eventId);
+  if (query.status) {
+    if (typeof query.status !== 'string' || !BOOKING_STATUSES.includes(query.status as BookingStatus)) {
+      throw badRequest('Invalid status');
+    }
+    filter.status = query.status;
+  }
   if (query.checked_in !== undefined) filter.checked_in = query.checked_in === 'true';
 
-  // Date range
   if (query.dateFrom || query.dateTo) {
     const dateFilter: Record<string, Date> = {};
-    if (query.dateFrom) dateFilter.$gte = new Date(query.dateFrom as string);
-    if (query.dateTo) dateFilter.$lte = new Date(query.dateTo as string);
+    if (query.dateFrom) dateFilter.$gte = validDate(query.dateFrom);
+    if (query.dateTo) dateFilter.$lte = validDate(query.dateTo);
     filter.created_at = dateFilter;
   }
 
@@ -39,8 +52,9 @@ async function getBookingsWithDetails(filter: Record<string, unknown>, options: 
   let bookingFilter = { ...filter };
 
   // If search is provided, first find matching users/events
-  if (search && search.trim()) {
-    const s = search.trim();
+  if (typeof search === 'string' && search.trim()) {
+    const s = escapeRegex(str(search, { max: 100 }));
+    const raw = search.trim();
     const [matchingUsers, matchingEvents] = await Promise.all([
       User.find({
         $or: [
@@ -59,7 +73,7 @@ async function getBookingsWithDetails(filter: Record<string, unknown>, options: 
     const orClauses: unknown[] = [];
     if (userIds.length) orClauses.push({ user_id: { $in: userIds } });
     if (eventIds.length) orClauses.push({ event_id: { $in: eventIds } });
-    if (mongoose.Types.ObjectId.isValid(s)) orClauses.push({ _id: new mongoose.Types.ObjectId(s) });
+    if (/^[a-f\d]{24}$/i.test(raw)) orClauses.push({ _id: new mongoose.Types.ObjectId(raw) });
 
     if (orClauses.length === 0) return { bookings: [], total: 0 };
 
@@ -188,28 +202,22 @@ async function getBookingsWithDetails(filter: Record<string, unknown>, options: 
 // ── handler ──────────────────────────────────────────────────────────────────
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
-  setCorsHeaders(res);
+  setCorsHeaders(res, req);
   if (req.method === 'OPTIONS') return res.status(200).end();
 
-  await dbConnect();
-
   try {
-    requireAdmin(req);
+    await requireAdmin(req);
+    await dbConnect();
 
-    // ── GET – list bookings ────────────────────────────────────────────────
+    // GET: list bookings
     if (req.method === 'GET') {
-      const {
-        page = '1', limit = '20',
-        eventId, status, checked_in,
-        dateFrom, dateTo, search,
-      } = req.query as Record<string, string>;
-
-      const pageNum = Math.max(1, parseInt(page, 10));
-      const limitNum = Math.min(100, Math.max(1, parseInt(limit, 10)));
+      const q = req.query as Record<string, string>;
+      const pageNum = clampInt(q.page, 1, 1, 100_000);
+      const limitNum = clampInt(q.limit, 20, 1, 100);
       const skip = (pageNum - 1) * limitNum;
 
-      const filter = buildFilter({ eventId, status, checked_in, dateFrom, dateTo });
-      const { bookings, total } = await getBookingsWithDetails(filter, { skip, limit: limitNum, search });
+      const filter = buildFilter({ eventId: q.eventId, status: q.status, checked_in: q.checked_in, dateFrom: q.dateFrom, dateTo: q.dateTo });
+      const { bookings, total } = await getBookingsWithDetails(filter, { skip, limit: limitNum, search: q.search });
 
       return res.status(200).json({
         data: bookings,
@@ -217,78 +225,71 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       });
     }
 
-    // ── PATCH – update booking status / checked_in ─────────────────────────
+    // PATCH: update booking status / checked_in / note
     if (req.method === 'PATCH') {
-      const { id, status, checked_in, booking_note } = req.body as {
-        id: string;
-        status?: string;
-        checked_in?: boolean;
-        booking_note?: string;
-      };
+      const body = (req.body ?? {}) as Record<string, unknown>;
+      const id = objectId(body.id);
+      let status = body.status;
+      let checkedIn = body.checked_in;
 
-      if (!id) return res.status(400).json({ error: 'id is required' });
-      if (!mongoose.Types.ObjectId.isValid(id)) return res.status(400).json({ error: 'Invalid booking ID' });
-
-      const allowed = ['pending', 'confirmed', 'cancelled', 'refunded', 'checked-in'];
-      if (status && !allowed.includes(status)) {
-        return res.status(400).json({ error: `status must be one of: ${allowed.join(', ')}` });
+      // The UI sends 'checked-in' as a status; it is a flag on the booking, not a status.
+      if (status === 'checked-in') { checkedIn = true; status = undefined; }
+      if (status !== undefined && (typeof status !== 'string' || !BOOKING_STATUSES.includes(status as BookingStatus))) {
+        throw badRequest(`status must be one of: ${BOOKING_STATUSES.join(', ')}, checked-in`);
       }
+      if (checkedIn !== undefined && typeof checkedIn !== 'boolean') throw badRequest('checked_in must be a boolean');
 
-      const update: Record<string, unknown> = {};
-      if (status !== undefined) update.status = status;
-      if (checked_in !== undefined) {
-        update.checked_in = checked_in;
-        update.checked_in_at = checked_in ? new Date() : null;
+      const extra: Record<string, unknown> = {};
+      if (checkedIn !== undefined) {
+        extra.checked_in = checkedIn;
+        extra.checked_in_at = checkedIn ? new Date() : null;
       }
-      if (booking_note !== undefined) update.booking_note = booking_note;
-
-      if (!Object.keys(update).length) {
-        return res.status(400).json({ error: 'Nothing to update' });
+      if (body.booking_note !== undefined) {
+        extra.booking_note = body.booking_note === null ? null : str(body.booking_note, { max: 500 });
       }
+      if (status === undefined && !Object.keys(extra).length) throw badRequest('Nothing to update');
 
-      const booking = await Booking.findByIdAndUpdate(id, { $set: update }, { new: true }).lean();
-      if (!booking) return res.status(404).json({ error: 'Booking not found' });
-
-      // If cancelled/refunded, release seats
-      if (status === 'cancelled' || status === 'refunded') {
-        const bookingSeats = await BookingSeat.find({ booking_id: id }).lean();
-        const seatIds = bookingSeats.map((bs) => (bs as unknown as { seat_id: mongoose.Types.ObjectId }).seat_id);
-        if (seatIds.length) {
-          await Seat.updateMany({ _id: { $in: seatIds as mongoose.Types.ObjectId[] } }, { $set: { status: 'available', heldBy: null, heldUntil: null } });
-        }
+      let booking;
+      if (status !== undefined) {
+        // Moves seats in the same transaction (frees them and drops the BookingSeat links).
+        booking = await setBookingStatus(id, status as BookingStatus, extra);
+      } else {
+        booking = await Booking.findByIdAndUpdate(id, { $set: extra }, { new: true }).lean();
+        if (!booking) throw notFound('Booking not found');
       }
-
       return res.status(200).json({ success: true, booking });
     }
 
-    // ── DELETE – hard delete a booking ─────────────────────────────────────
+    // DELETE: hard delete a booking and free its seats, in one transaction
     if (req.method === 'DELETE') {
-      const { id } = req.body as { id: string };
-
-      if (!id) return res.status(400).json({ error: 'id is required' });
-      if (!mongoose.Types.ObjectId.isValid(id)) return res.status(400).json({ error: 'Invalid booking ID' });
-
-      const booking = await Booking.findById(id);
-      if (!booking) return res.status(404).json({ error: 'Booking not found' });
-
-      // Release seats
-      const bookingSeats = await BookingSeat.find({ booking_id: id }).lean();
-      const seatIds = bookingSeats.map((bs) => (bs as unknown as { seat_id: mongoose.Types.ObjectId }).seat_id);
-      if (seatIds.length) {
-        await Seat.updateMany({ _id: { $in: seatIds as mongoose.Types.ObjectId[] } }, { $set: { status: 'available', heldBy: null, heldUntil: null } });
+      const id = objectId(((req.body ?? {}) as Record<string, unknown>).id);
+      const session = await mongoose.startSession();
+      try {
+        let found = true;
+        await session.withTransaction(async () => {
+          const booking = await Booking.findById(id).session(session);
+          if (!booking) { found = false; return; }
+          const links = await BookingSeat.find({ booking_id: id }).select('seat_id').session(session).lean();
+          const seatIds = links.map((l) => l.seat_id);
+          await BookingSeat.deleteMany({ booking_id: id }, { session });
+          if (seatIds.length) {
+            await Seat.updateMany(
+              { _id: { $in: seatIds }, status: 'booked' },
+              { $set: { status: 'available', heldBy: null, heldUntil: null, heldSince: null } },
+              { session }
+            );
+          }
+          await booking.deleteOne({ session });
+        });
+        if (!found) throw notFound('Booking not found');
+      } finally {
+        await session.endSession();
       }
-      await BookingSeat.deleteMany({ booking_id: id });
-      await booking.deleteOne();
-
       return res.status(200).json({ success: true });
     }
 
     return res.status(405).json({ error: 'Method not allowed' });
-  } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : 'Internal server error';
-    if (message === 'Authentication required') return res.status(401).json({ error: message });
-    if (message === 'Admin access required') return res.status(403).json({ error: message });
-    console.error('[api/admin/bookings-manage]', err);
-    return res.status(500).json({ error: message });
+  } catch (err) {
+    return handleApiError(res, err, '[api/admin/bookings-manage]');
   }
 }

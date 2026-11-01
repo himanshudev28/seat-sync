@@ -15,6 +15,8 @@ export interface IUser extends Document {
   total_logins: number;
   google_id: string | null;      // set for Google OAuth users
   auth_provider: 'local' | 'google'; // which auth method was used
+  token_version: number;         // bump to revoke all issued sessions
+  email_verified: boolean;       // false for local registration until verified
   created_at: Date;
   updated_at: Date;
   comparePassword(candidatePassword: string): Promise<boolean>;
@@ -35,6 +37,8 @@ const UserSchema = new Schema<IUser>(
     total_logins: { type: Number, default: 0 },
     google_id: { type: String, default: null, sparse: true },
     auth_provider: { type: String, enum: ['local', 'google'], default: 'local' },
+    token_version: { type: Number, default: 0 },
+    email_verified: { type: Boolean, default: false },
   },
   {
     timestamps: { createdAt: 'created_at', updatedAt: 'updated_at' },
@@ -52,6 +56,7 @@ UserSchema.pre('save', async function () {
 UserSchema.methods.comparePassword = async function (
   candidatePassword: string
 ): Promise<boolean> {
+  if (!this.password) return false;
   return bcrypt.compare(candidatePassword, this.password);
 };
 

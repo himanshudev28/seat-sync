@@ -3,33 +3,27 @@ import dbConnect from '../../db.js';
 import Seat from '../../models/Seat.js';
 import { setCorsHeaders } from '../_utils/cors.js';
 import { requireAuth } from '../_utils/auth.js';
+import { handleApiError } from '../_utils/http.js';
+import { objectIdArray } from '../_utils/validate.js';
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
-  setCorsHeaders(res);
+  setCorsHeaders(res, req);
   if (req.method === 'OPTIONS') return res.status(200).end();
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
 
-  await dbConnect();
-
   try {
-    const { userId } = requireAuth(req);
-    const { seatIds } = req.body as { seatIds: string[] };
-
-    if (!seatIds || seatIds.length === 0) {
-      return res.status(400).json({ error: 'seatIds array is required' });
-    }
+    const { userId } = await requireAuth(req);
+    const seatIds = objectIdArray((req.body ?? {}).seatIds, { max: 50, noun: 'seats' });
+    await dbConnect();
 
     // Only release seats that are currently held by this user
     await Seat.updateMany(
-      { _id: { $in: seatIds }, heldBy: userId, status: 'reserved' } as any,
-      { $set: { status: 'available', heldBy: null, heldUntil: null } }
+      { _id: { $in: seatIds }, heldBy: userId, status: 'reserved' },
+      { $set: { status: 'available', heldBy: null, heldUntil: null, heldSince: null } }
     );
 
     return res.status(200).json({ released: true, seatIds });
-  } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : 'Internal server error';
-    if (message === 'Authentication required') return res.status(401).json({ error: message });
-    console.error('[api/seats/release]', err);
-    return res.status(500).json({ error: message });
+  } catch (err) {
+    return handleApiError(res, err, '[api/seats/release]');
   }
 }

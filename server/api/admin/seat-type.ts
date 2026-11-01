@@ -1,31 +1,36 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 import mongoose from 'mongoose';
 import dbConnect from '../../db.js';
-import Seat from '../../models/Seat.js';
+import Seat, { SEAT_TYPES, type SeatType } from '../../models/Seat.js';
 import BookingSeat from '../../models/BookingSeat.js';
 import Booking from '../../models/Booking.js';
 import { setCorsHeaders } from '../_utils/cors.js';
 import { requireAdmin } from '../_utils/auth.js';
+import { badRequest, handleApiError } from '../_utils/http.js';
+import { objectIdArray, str } from '../_utils/validate.js';
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
-  setCorsHeaders(res);
+  setCorsHeaders(res, req);
   if (req.method === 'OPTIONS') return res.status(200).end();
   if (req.method !== 'PATCH') return res.status(405).json({ error: 'Method not allowed' });
 
-  await dbConnect();
-
   try {
-    requireAdmin(req);
-    const { seatIds, seat_type, label, forceStatus } = req.body as {
-      seatIds: string[];
-      seat_type?: 'standard' | 'vip' | 'blocked';
+    await requireAdmin(req);
+    const { seat_type, label, forceStatus } = (req.body ?? {}) as {
+      seat_type?: SeatType;
       label?: string | null;
       forceStatus?: 'available' | 'reserved' | 'booked';
     };
 
-    if (!seatIds?.length) {
-      return res.status(400).json({ error: 'seatIds array is required' });
+    const seatIds = objectIdArray((req.body ?? {}).seatIds, { max: 500 });
+    if (seat_type !== undefined && !(SEAT_TYPES as readonly string[]).includes(seat_type as string)) {
+      throw badRequest(`seat_type must be one of: ${SEAT_TYPES.join(', ')}`);
     }
+    if (forceStatus !== undefined && !['available', 'reserved', 'booked'].includes(forceStatus as string)) {
+      throw badRequest('forceStatus must be available, reserved or booked');
+    }
+    if (label !== undefined && label !== null) str(label, { max: 50 });
+    await dbConnect();
 
     const update: Record<string, unknown> = {};
     if (seat_type !== undefined) update.seat_type = seat_type;
@@ -86,11 +91,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       cancelledBookings,
       deletedBookingSeats,
     });
-  } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : 'Internal server error';
-    if (message === 'Authentication required') return res.status(401).json({ error: message });
-    if (message === 'Admin access required') return res.status(403).json({ error: message });
-    console.error('[api/admin/seat-type]', err);
-    return res.status(500).json({ error: message });
+  } catch (err) {
+    return handleApiError(res, err, '[api/admin/seat-type]');
   }
 }

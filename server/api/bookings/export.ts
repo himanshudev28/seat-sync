@@ -6,33 +6,29 @@ import Event from '../../models/Event.js';
 import User from '../../models/User.js';
 import { setCorsHeaders } from '../_utils/cors.js';
 import { requireAdmin } from '../_utils/auth.js';
-
-function escapeCSV(value: unknown): string {
-  return `"${String(value ?? '').replace(/"/g, '""')}"`;
-}
+import { csvCell, objectId, safeFilename } from '../_utils/validate.js';
+import { handleApiError, notFound } from '../_utils/http.js';
 
 function toCSV(rows: unknown[][]): string {
-  return rows.map((row) => row.map(escapeCSV).join(',')).join('\n');
+  return rows.map((row) => row.map(csvCell).join(',')).join('\n');
 }
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
-  setCorsHeaders(res);
+  setCorsHeaders(res, req);
   if (req.method === 'OPTIONS') return res.status(200).end();
   if (req.method !== 'GET') return res.status(405).json({ error: 'Method not allowed' });
 
-  await dbConnect();
-
   try {
-    requireAdmin(req);
-
-    const { eventId } = req.query;
-    if (!eventId) return res.status(400).json({ error: 'eventId query param is required' });
+    await requireAdmin(req);
+    const eventId = objectId(req.query.eventId);
+    await dbConnect();
 
     const event = await Event.findById(eventId).lean() as { title: string } | null;
-    if (!event) return res.status(404).json({ error: 'Event not found' });
+    if (!event) throw notFound('Event not found');
 
     const bookings = await Booking.find({ event_id: eventId })
       .select('user_id total_price status checked_in checked_in_at booking_note created_at')
+      .sort({ created_at: 1, _id: 1 })
       .limit(5_000)
       .lean() as Array<{
       _id: unknown;
@@ -99,14 +95,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
     const csv = toCSV([header, ...dataRows]);
 
-    res.setHeader('Content-Type', 'text/csv');
-    res.setHeader('Content-Disposition', `attachment; filename="${event.title}-bookings.csv"`);
+    res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    res.setHeader('Content-Disposition', `attachment; filename="${safeFilename(event.title)}-bookings.csv"`);
     return res.status(200).send(csv);
-  } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : 'Internal server error';
-    if (message === 'Authentication required') return res.status(401).json({ error: message });
-    if (message === 'Admin access required') return res.status(403).json({ error: message });
-    console.error('[api/bookings/export]', err);
-    return res.status(500).json({ error: message });
+  } catch (err) {
+    return handleApiError(res, err, '[api/bookings/export]');
   }
 }

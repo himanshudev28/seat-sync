@@ -13,8 +13,21 @@ import User from './models/User.js';
 import EventModel from './models/Event.js';
 import SeatModel from './models/Seat.js';
 import BookingModel from './models/Booking.js';
+import { assertSafeSeedTarget } from './seedGuard.js';
+import { tierPrice } from './seatPricing.js';
+
+/**
+ * Event dates are relative to "now" so a fresh seed is always bookable, and expressed as
+ * India local time (IST = UTC+05:30) so "7 PM" shows as 7 PM, not 12:30 AM.
+ */
+function istDateFromNow(days: number, hour: number, minute: number): Date {
+  const d = new Date(Date.now() + days * 86_400_000);
+  // Midnight UTC of that calendar day, then the IST wall-clock time minus the 5h30 offset.
+  return new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate(), hour, minute) - 330 * 60_000);
+}
 
 async function seed() {
+  assertSafeSeedTarget(process.env.MONGODB_URI);
   console.log('🌱  Connecting to MongoDB…');
   await dbConnect();
   console.log('✅  Connected.');
@@ -54,9 +67,9 @@ async function seed() {
       description:
         'An electrifying night of rock music featuring top local and national bands. ' +
         'Get ready for an unforgettable experience under the stars.',
-      date: new Date('2026-07-15T19:00:00Z'),
+      date: istDateFromNow(30, 19, 0),
       location: 'Riverside Amphitheatre, Mumbai',
-      price: 50,
+      price: 1499,
       category: 'Concert',
       is_published: true,
       is_free: false,
@@ -68,9 +81,9 @@ async function seed() {
       description:
         'Join industry leaders for a full-day conference covering AI, Web3, ' +
         'and the future of software development. Workshops and networking included.',
-      date: new Date('2026-08-20T09:00:00Z'),
+      date: istDateFromNow(55, 9, 30),
       location: 'Convention Centre, Bangalore',
-      price: 25,
+      price: 799,
       category: 'Conference',
       is_published: true,
       is_free: false,
@@ -82,7 +95,7 @@ async function seed() {
       description:
         'A relaxed evening meetup for developers, designers, and product enthusiasts. ' +
         'Free drinks, lightning talks, and plenty of networking.',
-      date: new Date('2026-06-10T18:30:00Z'),
+      date: istDateFromNow(40, 18, 30),
       location: 'CoWork Hub, Delhi',
       price: 0,
       category: 'Meetup',
@@ -96,9 +109,9 @@ async function seed() {
       description:
         'The biggest sports event of the year. Watch the top teams battle for the championship ' +
         'trophy in an electrifying atmosphere.',
-      date: new Date('2026-06-15T18:00:00Z'),
+      date: istDateFromNow(75, 19, 30),
       location: 'National Stadium, Main Arena',
-      price: 75,
+      price: 2499,
       category: 'Sports',
       image_url: 'https://images.unsplash.com/photo-1504450758481-7338eba7524a?w=800',
       is_published: true,
@@ -111,9 +124,9 @@ async function seed() {
       description:
         "A breathtaking modern retelling of Shakespeare's classic tragedy. " +
         'Featuring stunning visuals and an award-winning cast.',
-      date: new Date('2026-07-01T20:00:00Z'),
+      date: istDateFromNow(110, 20, 0),
       location: 'Grand Theater Hall',
-      price: 45,
+      price: 999,
       category: 'Theater',
       image_url: 'https://images.unsplash.com/photo-1503095392235-fc1bc0d8c8f5?w=800',
       is_published: true,
@@ -126,9 +139,10 @@ async function seed() {
 
   // ── Generate seats for each event ─────────────────────────────────────────
   // Layout: 12 rows (A–L) × 20 cols
-  // Front 4 rows  (A–D): basePrice + 10  (premium)
-  // Middle 4 rows (E–H): basePrice + 5   (standard)
-  // Back 4 rows   (I–L): basePrice       (economy)
+  // Cinema pricing (server/seatPricing.ts): front rows are cheapest.
+  // Front 4 rows  (A–D): base
+  // Middle 4 rows (E–H): base + step
+  // Back 4 rows   (I–L): base + 2 × step
   const ROWS = 12;
   const COLS = 20;
   const SECTION = 4; // rows per tier
@@ -157,17 +171,17 @@ async function seed() {
 
     for (const row of frontRows) {
       for (let col = 1; col <= COLS; col++) {
-        seats.push({ event_id: event._id, row, number: col, price: basePrice + 10, status: 'available' });
+        seats.push({ event_id: event._id, row, number: col, price: tierPrice(basePrice, 0), status: 'available' });
       }
     }
     for (const row of middleRows) {
       for (let col = 1; col <= COLS; col++) {
-        seats.push({ event_id: event._id, row, number: col, price: basePrice + 5, status: 'available' });
+        seats.push({ event_id: event._id, row, number: col, price: tierPrice(basePrice, 1), status: 'available' });
       }
     }
     for (const row of backRows) {
       for (let col = 1; col <= COLS; col++) {
-        seats.push({ event_id: event._id, row, number: col, price: basePrice, status: 'available' });
+        seats.push({ event_id: event._id, row, number: col, price: tierPrice(basePrice, 2), status: 'available' });
       }
     }
 

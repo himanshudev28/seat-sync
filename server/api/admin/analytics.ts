@@ -6,18 +6,19 @@ import Booking from '../../models/Booking.js';
 import User from '../../models/User.js';
 import { setCorsHeaders } from '../_utils/cors.js';
 import { requireAdmin } from '../_utils/auth.js';
+import { handleApiError } from '../_utils/http.js';
+import { objectId } from '../_utils/validate.js';
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
-  setCorsHeaders(res);
+  setCorsHeaders(res, req);
   if (req.method === 'OPTIONS') return res.status(200).end();
   if (req.method !== 'GET') return res.status(405).json({ error: 'Method not allowed' });
 
   await dbConnect();
 
   try {
-    requireAdmin(req);
-    const { eventId } = req.query as { eventId?: string };
-    if (!eventId) return res.status(400).json({ error: 'eventId query param is required' });
+    await requireAdmin(req);
+    const eventId = objectId(req.query.eventId);
 
     const eventObjId = new mongoose.Types.ObjectId(eventId);
     const fourteenDaysAgo = new Date(Date.now() - 14 * 86400000);
@@ -34,6 +35,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           booked:    { $sum: { $cond: [{ $eq: ['$status', 'booked'] }, 1, 0] } },
           reserved:  { $sum: { $cond: [{ $eq: ['$status', 'reserved'] }, 1, 0] } },
           vip:       { $sum: { $cond: [{ $eq: ['$seat_type', 'vip'] }, 1, 0] } },
+          wheelchair: { $sum: { $cond: [{ $eq: ['$seat_type', 'wheelchair'] }, 1, 0] } },
           blocked:   { $sum: { $cond: [{ $eq: ['$seat_type', 'blocked'] }, 1, 0] } },
         }},
       ]),
@@ -75,7 +77,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       ]),
     ]);
 
-    const s = seatStats[0] ?? { total: 0, available: 0, booked: 0, reserved: 0, vip: 0, blocked: 0 };
+    const s = seatStats[0] ?? { total: 0, available: 0, booked: 0, reserved: 0, vip: 0, wheelchair: 0, blocked: 0 };
     const b = bookingStats[0] ?? { total: 0, confirmed: 0, cancelled: 0, revenue: 0, checked_in: 0 };
 
     // Build trend array for last 14 days, filling zeros for missing days
@@ -103,6 +105,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       booked_seats: s.booked,
       reserved_seats: s.reserved,
       vip_seats: s.vip,
+      wheelchair_seats: s.wheelchair ?? 0,
       blocked_seats: s.blocked,
       total_bookings: b.total,
       confirmed_bookings: b.confirmed,
@@ -113,11 +116,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       booking_trend: trend,
       most_active_users,
     });
-  } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : 'Internal server error';
-    if (message === 'Authentication required') return res.status(401).json({ error: message });
-    if (message === 'Admin access required') return res.status(403).json({ error: message });
-    console.error('[api/admin/analytics]', err);
-    return res.status(500).json({ error: message });
+  } catch (err) {
+    return handleApiError(res, err, '[api/admin/analytics]');
   }
 }

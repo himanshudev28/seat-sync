@@ -1,5 +1,7 @@
 
 import type { VercelRequest, VercelResponse } from '@vercel/node';
+import { setCorsHeaders, assertSameOrigin } from '../server/api/_utils/cors.js';
+import { handleApiError } from '../server/api/_utils/http.js';
 
 
 import route_1b from '../server/api/admin/bookings-manage.js';
@@ -43,6 +45,15 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   try {
     const pathname = req.url ? req.url.split('?')[0] : '/';
 
+    // Central CORS + CSRF guard. The Google OAuth callback is a top-level GET, so it is exempt.
+    setCorsHeaders(res, req);
+    if (req.method === 'OPTIONS') return res.status(204).end();
+    // Enforced whenever the request carries the session cookie (cookie auth is what makes CSRF possible);
+    // header-only Bearer clients (no cookie) are not CSRF-able.
+    if (pathname !== '/api/auth/google/callback' && String(req.headers.cookie || '').includes('ss_session=')) {
+      assertSameOrigin(req);
+    }
+
     if (pathname === '/api/admin/generate-description') return route_ai(req, res);
     if (pathname === '/api/admin/bookings-manage') return route_1b(req, res);
     if (pathname === '/api/admin/analytics') return route_2(req, res);
@@ -71,13 +82,13 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     if (pathname === '/api/bookings/status') return route_24(req, res);
     if (pathname === '/api/bookings') return route_25(req, res);
 
-    const match_20 = pathname.match(/^\/api\/bookings\/([^\/]+)$/);
+    const match_20 = pathname.match(/^\/api\/bookings\/([^/]+)$/);
     if (match_20) {
       req.query.id = match_20[1];
       return route_20(req, res);
     }
 
-    const match_26 = pathname.match(/^\/api\/events\/([^\/]+)$/);
+    const match_26 = pathname.match(/^\/api\/events\/([^/]+)$/);
     if (match_26) {
       req.query.id = match_26[1];
       return route_26(req, res);
@@ -90,17 +101,14 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     if (pathname === '/api/seats/reset') return route_32(req, res);
     if (pathname === '/api/seats') return route_33(req, res);
 
-    const match_validate = pathname.match(/^\/api\/validate\/([^\/]+)$/);
+    const match_validate = pathname.match(/^\/api\/validate\/([^/]+)$/);
     if (match_validate) {
       req.query.bookingId = match_validate[1];
       return route_validate(req, res);
     }
 
-    return res.status(404).json({ error: 'Route not found: ' + pathname });
+    return res.status(404).json({ error: 'Not found' });
   } catch (err: unknown) {
-    console.error('[api/index] Unhandled error:', err);
-    const message = err instanceof Error ? err.message : 'Internal server error';
-    return res.status(500).json({ error: message });
+    return handleApiError(res, err, '[api/index] Unhandled error:');
   }
 }
-

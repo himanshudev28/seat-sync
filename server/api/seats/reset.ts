@@ -1,47 +1,49 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
+import mongoose from 'mongoose';
 import dbConnect from '../../db.js';
 import Seat from '../../models/Seat.js';
 import Booking from '../../models/Booking.js';
+import BookingSeat from '../../models/BookingSeat.js';
 import { setCorsHeaders } from '../_utils/cors.js';
-import { requireAuth } from '../_utils/auth.js';
+import { requireAdmin } from '../_utils/auth.js';
+import { handleApiError } from '../_utils/http.js';
+import { objectId } from '../_utils/validate.js';
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
-  setCorsHeaders(res);
+  setCorsHeaders(res, req);
   if (req.method === 'OPTIONS') return res.status(200).end();
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
 
-  await dbConnect();
-
   try {
-    const { is_admin } = requireAuth(req);
-    if (!is_admin) return res.status(403).json({ error: 'Admin access required' });
+    await requireAdmin(req);
+    const eventId = objectId((req.body ?? {}).eventId);
+    await dbConnect();
 
-    const { eventId } = req.body as { eventId: string };
-    if (!eventId) return res.status(400).json({ error: 'eventId is required' });
-
-    // Cancel all active bookings for this event
-    await Booking.updateMany(
-      { event_id: eventId, status: { $in: ['confirmed', 'pending'] } } as any,
-      { status: 'cancelled' } as any
-    );
-
-    // Reset every seat to available and clear any holds
-    const result = await Seat.updateMany(
-      { event_id: eventId } as any,
-      {
-        $set: { status: 'available' },
-        $unset: { heldBy: 1, heldUntil: 1 },
-      } as any
-    );
-
-    return res.status(200).json({
-      message: 'All seats reset to available',
-      seatsReset: result.modifiedCount,
-    });
-  } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : 'Internal server error';
-    if (message === 'Authentication required') return res.status(401).json({ error: message });
-    console.error('[api/seats/reset]', err);
-    return res.status(500).json({ error: message });
+    const session = await mongoose.startSession();
+    try {
+      let seatsReset = 0;
+      await session.withTransaction(async () => {
+        // Every booking for the event goes (confirmed and pending), with its seat links.
+        const active = await Booking.find({ event_id: eventId, status: { $in: ['confirmed', 'pending'] } })
+          .select('_id').session(session).lean();
+        const ids = active.map((b) => b._id);
+        if (ids.length) {
+          await BookingSeat.deleteMany({ booking_id: { $in: ids } }, { session });
+          await Booking.updateMany({ _id: { $in: ids } }, { $set: { status: 'cancelled' } }, { session });
+        }
+        // Free booked seats and clear holds; blocked seats stay blocked.
+        const r = await Seat.updateMany(
+          { event_id: eventId, seat_type: { $ne: 'blocked' }, status: { $in: ['booked', 'reserved'] } },
+          { $set: { status: 'available', heldBy: null, heldUntil: null, heldSince: null } },
+          { session }
+        );
+        seatsReset = r.modifiedCount;
+      });
+      return res.status(200).json({ message: 'All seats reset to available', seatsReset });
+    } finally {
+      await session.endSession();
+    }
+  } catch (err) {
+    return handleApiError(res, err, '[api/seats/reset]');
   }
 }

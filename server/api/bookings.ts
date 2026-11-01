@@ -1,25 +1,34 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 import mongoose from 'mongoose';
+import { randomBytes } from 'node:crypto';
 import dbConnect from '../db.js';
 import Booking from '../models/Booking.js';
 import BookingSeat from '../models/BookingSeat.js';
 import Event from '../models/Event.js';
 import Seat from '../models/Seat.js';
 import { setCorsHeaders } from './_utils/cors.js';
-import { requireAuth } from './_utils/auth.js';
+import { requireAdmin, requireAuth } from './_utils/auth.js';
+import { badRequest, forbidden, handleApiError, HttpError, notFound } from './_utils/http.js';
+import { rateLimit } from './_utils/rateLimit.js';
+import { objectId, objectIdArray } from './_utils/validate.js';
+import { countCommittedSeats, expireStaleHolds } from './seats/_holds.js';
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
-  setCorsHeaders(res);
+  setCorsHeaders(res, req);
   if (req.method === 'OPTIONS') return res.status(200).end();
 
-  await dbConnect();
-
   try {
-    const authUser = requireAuth(req);
+    const authUser = await requireAuth(req);
+    await dbConnect();
 
-    // GET /api/bookings?userId=xxx  – user bookings with event + seat details (no N+1)
+    // GET /api/bookings  – the caller's bookings with event + seat details (no N+1).
+    // ?userId= is honoured for admins only; everyone else always gets their own.
     if (req.method === 'GET') {
-      const targetUserId = (req.query.userId as string) || authUser.userId;
+      let targetUserId = authUser.userId;
+      if (req.query.userId !== undefined && String(req.query.userId) !== authUser.userId) {
+        await requireAdmin(req);
+        targetUserId = objectId(req.query.userId);
+      }
 
       const bookings = await Booking.find({ user_id: targetUserId })
         .populate('event_id', 'title date location price category image_url is_free')
@@ -27,7 +36,17 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         .limit(100)
         .lean();
 
-      const bookingIds = bookings.map((b) => (b as { _id: unknown })._id) as string[];
+      // Backfill the ticket token for bookings made before tokens existed.
+      const missing = bookings.filter((b) => !(b as { ticket_token?: string }).ticket_token);
+      if (missing.length) {
+        await Booking.bulkWrite(missing.map((b) => {
+          const token = randomBytes(16).toString('base64url');
+          (b as { ticket_token?: string }).ticket_token = token;
+          return { updateOne: { filter: { _id: b._id, ticket_token: { $exists: false } }, update: { $set: { ticket_token: token } } } };
+        }));
+      }
+
+      const bookingIds = bookings.map((b) => b._id);
       const allBookingSeats = await BookingSeat.find({ booking_id: { $in: bookingIds } })
         .populate('seat_id')
         .lean();
@@ -43,147 +62,112 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       const enriched = bookings.map((b) => ({
         ...b,
         event: (b as { event_id: unknown }).event_id,
-        booking_seats: seatsByBooking.get((b as { _id: mongoose.Types.ObjectId })._id.toString()) ?? [],
+        booking_seats: seatsByBooking.get(b._id.toString()) ?? [],
       }));
 
       return res.status(200).json(enriched);
     }
 
-    // POST /api/bookings  – atomic: verify holds → enforce booking guards →
-    //                     create booking → link seats → mark booked
+    // POST /api/bookings  – atomic: verify holds -> enforce guards -> create booking ->
+    //                       link seats -> mark booked, all in one transaction.
     if (req.method === 'POST') {
-      const { eventId, seatIds, totalPrice } = req.body as {
-        eventId: string;
-        seatIds: string[];
-        totalPrice?: number;
-      };
+      rateLimit(req, { bucket: 'booking-create', limit: 20, windowMs: 60_000, key: authUser.userId });
 
-      if (!eventId || !seatIds || seatIds.length === 0) {
-        return res.status(400).json({ error: 'eventId and seatIds are required' });
-      }
-      if (!mongoose.Types.ObjectId.isValid(eventId)) {
-        return res.status(400).json({ error: 'Invalid eventId' });
+      const body = (req.body ?? {}) as Record<string, unknown>;
+      const eventId = objectId(body.eventId);
+      const seatIds = objectIdArray(body.seatIds, { max: 10, noun: 'seats' });
+      const totalPrice = body.totalPrice;
+      if (totalPrice !== undefined && (typeof totalPrice !== 'number' || !Number.isFinite(totalPrice))) {
+        throw badRequest('Invalid totalPrice');
       }
 
-      // ── Server-side guards (cannot trust the client) ─────────────────────
-      // Load the event once and check every business rule before we touch
-      // the seats or open a transaction. Cheaper to bail early.
-      const event = await Event.findById(eventId).lean() as
-        | (Record<string, unknown> & {
-            is_published?: boolean;
-            is_bookings_open?: boolean;
-            date?: Date;
-            max_seats_per_user?: number;
-            max_tickets_per_event?: number | null;
-            banned_users?: string[];
-          })
+      const event = (await Event.findById(eventId).lean()) as
+        | { is_published?: boolean; is_bookings_open?: boolean; date?: Date; max_seats_per_user?: number; banned_users?: string[] }
         | null;
-      if (!event) return res.status(404).json({ error: 'Event not found' });
-      if (!event.is_published) return res.status(403).json({ error: 'Event is not published' });
-      if (event.is_bookings_open === false) {
-        return res.status(403).json({ error: 'Bookings are closed for this event' });
-      }
-      if (event.date && new Date(event.date).getTime() < Date.now()) {
-        return res.status(403).json({ error: 'Event has already started' });
-      }
+      if (!event) throw notFound('Event not found');
+      if (!event.is_published) throw forbidden('Event is not published');
+      if (event.is_bookings_open === false) throw forbidden('Bookings are closed for this event');
+      if (event.date && new Date(event.date).getTime() < Date.now()) throw forbidden('Event has already started');
       if (Array.isArray(event.banned_users) && event.banned_users.includes(authUser.userId)) {
-        return res.status(403).json({ error: 'You are not allowed to book this event' });
+        throw forbidden('You are not allowed to book this event');
       }
 
-      // Enforce per-user seat cap. We count CURRENT confirmed bookings the
-      // user already has for this event so each request can't slip in just
-      // under the cap on its own.
       const maxPerUser = event.max_seats_per_user ?? 10;
       if (seatIds.length > maxPerUser) {
-        return res
-          .status(400)
-          .json({ error: `Cannot book more than ${maxPerUser} seats at once for this event` });
+        throw badRequest(`Cannot book more than ${maxPerUser} seats at once for this event`);
       }
-      if (maxPerUser > 0) {
-        const userBookings = await Booking.find({
-          event_id: eventId,
-          user_id: authUser.userId,
-          status: 'confirmed',
-        }).select('_id').lean();
-        if (userBookings.length > 0) {
-          const userBookingIds = userBookings.map((b) => String((b as { _id: unknown })._id));
-          const existingSeatCount = await BookingSeat.countDocuments({
-            booking_id: { $in: userBookingIds },
-          } as any);
-          if (existingSeatCount + seatIds.length > maxPerUser) {
-            return res.status(400).json({
-              error: `Booking limit exceeded. You can book at most ${maxPerUser} seats for this event (already have ${existingSeatCount}).`,
-            });
-          }
-        }
-      }
+
+      await expireStaleHolds(eventId);
 
       const session = await mongoose.startSession();
-      session.startTransaction();
-
       try {
-        const now = new Date();
+        let failure: HttpError | null = null;
+        let bookingId: mongoose.Types.ObjectId | null = null;
 
-        // Verify every seat is still held by this user within the time window
-        const heldSeats = await Seat.find({
-          _id: { $in: seatIds },
-          heldBy: authUser.userId,
-          status: 'reserved',
-          heldUntil: { $gt: now },
-        }).session(session);
+        // withTransaction retries write conflicts: a double-submit loses on the retry because the
+        // seats are no longer held, so exactly one booking comes out.
+        await session.withTransaction(async () => {
+          failure = null;
+          const now = new Date();
 
-        if (heldSeats.length !== seatIds.length) {
-          await session.abortTransaction();
-          return res.status(409).json({
-            error: 'One or more seat holds have expired – please re-select your seats',
-          });
-        }
+          // Cap check inside the transaction; counts confirmed + pending.
+          const existing = await countCommittedSeats(authUser.userId, eventId, session);
+          if (existing + seatIds.length > maxPerUser) {
+            failure = badRequest(`Booking limit exceeded. You can book at most ${maxPerUser} seats for this event (already have ${existing}).`);
+            return;
+          }
 
-        // Server is the source of truth for price — never trust the client value.
-        const serverPrice = heldSeats.reduce((sum, s) => sum + s.price, 0);
-        // Allow the client to send totalPrice for display, but if it diverges
-        // significantly (>1¢ tolerance for float drift), reject the request.
-        if (typeof totalPrice === 'number' && Math.abs(totalPrice - serverPrice) > 0.01) {
-          await session.abortTransaction();
-          return res.status(400).json({ error: 'Price mismatch — please refresh and retry' });
-        }
+          const heldSeats = await Seat.find({
+            _id: { $in: seatIds },
+            event_id: eventId,
+            seat_type: { $ne: 'blocked' },
+            heldBy: authUser.userId,
+            status: 'reserved',
+            heldUntil: { $gt: now },
+          }).session(session);
 
-        // Create the booking record
-        const [booking] = await Booking.create(
-          [{ event_id: eventId, user_id: authUser.userId, total_price: serverPrice, status: 'confirmed' }],
-          { session }
-        );
+          if (heldSeats.length !== seatIds.length) {
+            failure = new HttpError(409, 'One or more seat holds have expired. Please re-select your seats');
+            return;
+          }
 
-        // Create booking_seat junction rows
-        await BookingSeat.insertMany(
-          seatIds.map((seatId) => ({ booking_id: booking._id, seat_id: seatId })),
-          { session }
-        );
+          // Server is the source of truth for price.
+          const serverPrice = heldSeats.reduce((sum, s) => sum + s.price, 0);
+          if (typeof totalPrice === 'number' && Math.abs(totalPrice - serverPrice) > 0.01) {
+            failure = badRequest('Price mismatch. Please refresh and retry');
+            return;
+          }
 
-        // Mark seats as booked and clear hold fields
-        await Seat.updateMany(
-          { _id: { $in: seatIds } },
-          { $set: { status: 'booked', heldBy: null, heldUntil: null } },
-          { session }
-        );
+          const [booking] = await Booking.create(
+            [{ event_id: eventId, user_id: authUser.userId, total_price: serverPrice, status: 'confirmed' }],
+            { session }
+          );
+          await BookingSeat.insertMany(
+            seatIds.map((seatId) => ({ booking_id: booking._id, seat_id: seatId })),
+            { session }
+          );
+          await Seat.updateMany(
+            { _id: { $in: seatIds }, event_id: eventId },
+            { $set: { status: 'booked', heldBy: null, heldUntil: null, heldSince: null } },
+            { session }
+          );
+          bookingId = booking._id;
+        });
 
-        await session.commitTransaction();
-
-        const populated = await Booking.findById(booking._id).populate('event_id').lean();
+        if (failure) throw failure;
+        const populated = await Booking.findById(bookingId).populate('event_id').lean();
         return res.status(201).json(populated);
-      } catch (txErr) {
-        await session.abortTransaction();
-        throw txErr;
+      } catch (e) {
+        // A duplicate seat link means someone else booked it first.
+        if ((e as { code?: number }).code === 11000) throw new HttpError(409, 'One or more seats are no longer available');
+        throw e;
       } finally {
-        session.endSession();
+        await session.endSession();
       }
     }
 
     return res.status(405).json({ error: 'Method not allowed' });
-  } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : 'Internal server error';
-    if (message === 'Authentication required') return res.status(401).json({ error: message });
-    console.error('[api/bookings]', err);
-    return res.status(500).json({ error: message });
+  } catch (err) {
+    return handleApiError(res, err, '[api/bookings]');
   }
 }

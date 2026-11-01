@@ -1,34 +1,31 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { setCorsHeaders } from '../_utils/cors.js';
 import { requireAdmin } from '../_utils/auth.js';
+import { HttpError, handleApiError } from '../_utils/http.js';
+import { rateLimit } from '../_utils/rateLimit.js';
+import { httpsUrl, str } from '../_utils/validate.js';
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
-  setCorsHeaders(res);
+  setCorsHeaders(res, req);
   if (req.method === 'OPTIONS') return res.status(200).end();
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
 
   try {
-    requireAdmin(req);
+    const admin = await requireAdmin(req);
+    rateLimit(req, { bucket: 'ai-description', limit: 20, windowMs: 60 * 60_000, key: admin.userId });
 
-    const { title, category, imageUrl } = req.body as {
-      title?: string;
-      category?: string;
-      imageUrl?: string;
-    };
-
-    if (!title || !category) {
-      return res.status(400).json({ error: 'title and category are required' });
-    }
-    if (title.length > 200 || category.length > 100) {
-      return res.status(400).json({ error: 'Input too long' });
-    }
+    const body = (req.body ?? {}) as Record<string, unknown>;
+    const title = str(body.title, { min: 1, max: 200 });
+    const category = str(body.category, { min: 1, max: 100 });
+    const imageUrl = body.imageUrl === undefined || body.imageUrl === '' ? undefined : httpsUrl(body.imageUrl, { max: 2000 });
 
     const apiKey = process.env.GROQ_API_KEY;
     if (!apiKey) {
-      return res.status(500).json({ error: 'AI service not configured. Set GROQ_API_KEY.' });
+      console.error('[api/admin/generate-description] GROQ_API_KEY is not set');
+      throw new HttpError(503, 'AI service is unavailable');
     }
 
-    const imageContext = imageUrl && imageUrl.startsWith('http')
+    const imageContext = imageUrl
       ? `\nAn event image is available at: ${imageUrl} — use it as visual context for the description.`
       : '';
 
@@ -81,21 +78,19 @@ Write the description now:`;
     }
 
     if (!groqRes.ok) {
-      const errData = await groqRes.json().catch(() => ({})) as any;
-      throw new Error(errData?.error?.message || `Groq API error (${groqRes.status})`);
+      console.error('[api/admin/generate-description] upstream status', groqRes.status);
+      throw new HttpError(502, 'Could not generate a description right now');
     }
 
     const data = await groqRes.json() as any;
     const description = data?.choices?.[0]?.message?.content?.trim();
 
     if (!description) {
-      throw new Error('No description returned by AI');
+      throw new HttpError(502, 'Could not generate a description right now');
     }
 
     return res.status(200).json({ description });
-  } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : 'Failed to generate description';
-    console.error('[api/admin/generate-description]', err);
-    return res.status(500).json({ error: message });
+  } catch (err) {
+    return handleApiError(res, err, '[api/admin/generate-description]');
   }
 }

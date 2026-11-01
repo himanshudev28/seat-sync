@@ -5,6 +5,7 @@ import Event from '../../models/Event.js';
 import User from '../../models/User.js';
 import { setCorsHeaders } from '../_utils/cors.js';
 import { requireAdmin } from '../_utils/auth.js';
+import { handleApiError } from '../_utils/http.js';
 
 // Pre-aggregated dashboard stats. The Admin overview previously derived
 // counters from the paginated `/api/bookings/admin?page=1` response, which
@@ -12,14 +13,14 @@ import { requireAdmin } from '../_utils/auth.js';
 // endpoint hits the DB with grouped queries so the dashboard always reflects
 // the true state, regardless of pagination.
 export default async function handler(req: VercelRequest, res: VercelResponse) {
-  setCorsHeaders(res);
+  setCorsHeaders(res, req);
   if (req.method === 'OPTIONS') return res.status(200).end();
   if (req.method !== 'GET') return res.status(405).json({ error: 'Method not allowed' });
 
   await dbConnect();
 
   try {
-    requireAdmin(req);
+    await requireAdmin(req);
 
     const since30 = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
 
@@ -111,11 +112,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         count: c.count,
       })),
     });
-  } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : 'Internal server error';
-    if (message === 'Authentication required') return res.status(401).json({ error: message });
-    if (message === 'Admin access required') return res.status(403).json({ error: message });
-    console.error('[api/admin/stats]', err);
-    return res.status(500).json({ error: message });
+  } catch (err) {
+    return handleApiError(res, err, '[api/admin/stats]');
   }
 }

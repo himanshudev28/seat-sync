@@ -4,10 +4,10 @@ import dbConnect from '../db.js';
 import Event from '../models/Event.js';
 import Seat from '../models/Seat.js';
 import { setCorsHeaders, setNoCache, setPublicCache } from './_utils/cors.js';
-import { requireAdmin } from './_utils/auth.js';
-
-/** Escape user input before it goes into a RegExp. */
-const escapeRegex = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+import { getTokenFromRequest, requireAdmin } from './_utils/auth.js';
+import { handleApiError } from './_utils/http.js';
+import { escapeRegex } from './_utils/validate.js';
+import { pickEventFields } from './events/_fields.js';
 
 const withIds = (rows: unknown[]) =>
   rows.map((e) => ({ ...(e as Record<string, unknown>), id: String((e as { _id: unknown })._id) }));
@@ -58,12 +58,11 @@ async function attachSeatCounts<T extends { id: string }>(events: T[]): Promise<
 }
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
-  setCorsHeaders(res);
+  setCorsHeaders(res, req);
   if (req.method === 'OPTIONS') return res.status(200).end();
 
-  await dbConnect();
-
   try {
+    await dbConnect();
     // GET /api/events – ?published=true, ?category=, ?featured=true,
     // ?spotlight=true, ?facets=true
     if (req.method === 'GET') {
@@ -85,12 +84,26 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         const categories = rows
           .filter((r) => typeof r._id === 'string' && r._id.trim() !== '')
           .map((r) => ({ category: r._id as string, count: r.count as number }));
-        setPublicCache(res, 60);
+        setPublicCache(res, 30);
         return res.status(200).json(categories);
       }
 
       const filter: Record<string, unknown> = {};
-      if (published === 'true') filter.is_published = true;
+      // Unpublished drafts are admin-only: anyone else only ever sees published events.
+      let isAdmin = false;
+      if (published !== 'true' && !(featured === 'true' || spotlight === 'true') && getTokenFromRequest(req)) {
+        try { isAdmin = !!(await requireAdmin(req)); } catch { isAdmin = false; }
+      }
+      if (published === 'true' || !isAdmin) filter.is_published = true;
+
+      // Upcoming only by default (3 h grace so an event that just started still shows).
+      // ?include=past is admin only.
+      if (req.query.include === 'past') {
+        isAdmin = !!(await requireAdmin(req));
+        if (published === 'true') filter.is_published = true; else delete filter.is_published;
+      } else {
+        filter.date = { $gte: new Date(Date.now() - 3 * 3600_000) };
+      }
       // Case-insensitive exact match: links can carry "concert" while the
       // stored value is "Concert".
       if (typeof category === 'string' && category) {
@@ -116,7 +129,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           .limit(limit)
           .lean();
         if (curated.length > 0) {
-          setPublicCache(res, 60);
+          setPublicCache(res, 30);
           return res.status(200).json(await attachSeatCounts(withIds(curated)));
         }
       }
@@ -125,31 +138,20 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       // The admin dashboard re-fetches right after generating seats and must
       // never be served the 60s-old browser copy — the HTTP cache keys on the
       // URL alone, so the Authorization header wouldn't bypass it.
-      if (fresh === 'true') setNoCache(res);
-      else setPublicCache(res, 60);
+      if (isAdmin || fresh === 'true') setNoCache(res);
+      else setPublicCache(res, 30);
       return res.status(200).json(await attachSeatCounts(withIds(rawEvents)));
     }
 
     // POST /api/events  – create event (admin only)
     if (req.method === 'POST') {
-      const admin = requireAdmin(req);
-      const event = await Event.create({ ...req.body, created_by: admin.userId });
+      const admin = await requireAdmin(req);
+      const event = await Event.create({ ...pickEventFields(req.body, false), created_by: admin.userId });
       return res.status(201).json(event);
     }
 
     return res.status(405).json({ error: 'Method not allowed' });
-  } catch (err: unknown) {
-    const error = err as any;
-    const message = error.message || 'Internal server error';
-    console.error('[api/events] Error:', {
-      message,
-      stack: error.stack,
-      query: req.query,
-      method: req.method
-    });
-    return res.status(500).json({ 
-      error: message,
-      details: process.env.NODE_ENV === 'development' ? error.stack : undefined
-    });
+  } catch (err) {
+    return handleApiError(res, err, '[api/events]');
   }
 }
