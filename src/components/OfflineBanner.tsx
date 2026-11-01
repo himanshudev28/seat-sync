@@ -27,16 +27,16 @@ export default function OfflineBanner() {
 
   return (
     <div className="fixed top-20 left-0 right-0 z-[9998] px-4 pointer-events-none">
-      <div className="max-w-2xl mx-auto pointer-events-auto">
+      <div role="status" aria-live="polite" className="max-w-2xl mx-auto pointer-events-auto">
         <div className="flex items-center gap-3 px-4 py-2.5 rounded-xl border-l-4 border-primary bg-primary/10 dark:bg-primary/5 shadow-sm text-sm font-medium text-foreground">
-          <WifiOff className="h-4 w-4 text-primary shrink-0" />
+          <WifiOff aria-hidden="true" className="h-4 w-4 text-primary shrink-0" />
           <span className="flex-1">You're offline. Changes will sync when connected.</span>
           <button
             onClick={() => setDismissed(true)}
-            className="text-muted-foreground hover:text-foreground transition-colors ml-2"
-            aria-label="Dismiss"
+            className="-my-2 -mr-2 ml-1 inline-flex h-10 w-10 items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-surface-elevated hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            aria-label="Dismiss offline notice"
           >
-            <X className="h-4 w-4" />
+            <X aria-hidden="true" className="h-4 w-4" />
           </button>
         </div>
       </div>

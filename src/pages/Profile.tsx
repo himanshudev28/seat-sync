@@ -41,7 +41,7 @@ type Booking = {
 
 export default function Profile() {
   const navigate = useNavigate();
-  const { user, signOut } = useAuth();
+  const { user, signOut, refresh } = useAuth();
   const [loading, setLoading] = useState(true);
   const [profile, setProfile] = useState<Profile | null>(null);
   const [firstName, setFirstName] = useState("");
@@ -58,10 +58,8 @@ export default function Profile() {
   const [changingPassword, setChangingPassword] = useState(false);
 
   useEffect(() => {
-    if (!user) {
-      navigate("/auth");
-      return;
-    }
+    // <RequireAuth> guards this route; wait for the user, never redirect from here (it raced on refresh).
+    if (!user) return;
 
     fetchProfile();
     fetchBookings();
@@ -70,12 +68,12 @@ export default function Profile() {
   const fetchProfile = async () => {
     if (!user) return;
     try {
-      const token = localStorage.getItem("auth_token");
       const res = await fetch("/api/auth/me", {
-        headers: token ? { Authorization: `Bearer ${token}` } : {},
       });
       if (!res.ok) throw new Error("Failed to load profile");
-      const data = await res.json();
+      // /api/auth/me answers { user: {...} } (it used to be the user object itself).
+      const body = await res.json();
+      const data = body.user ?? body;
       const p: Profile = {
         id: data.id ?? data._id ?? "",
         first_name: data.first_name ?? null,
@@ -101,9 +99,7 @@ export default function Profile() {
     if (!user) return;
     setLoadingBookings(true);
     try {
-      const token = localStorage.getItem("auth_token");
       const response = await fetch(`/api/bookings?userId=${user.id}`, {
-        headers: token ? { Authorization: `Bearer ${token}` } : {},
       });
       if (!response.ok) throw new Error("Failed to fetch bookings");
       const raw: any[] = await response.json();
@@ -142,15 +138,15 @@ export default function Profile() {
     if (!user) return;
     setUpdating(true);
     try {
-      const token = localStorage.getItem("auth_token");
       const res = await fetch("/api/auth/update-profile", {
         method: "PATCH",
-        headers: { "Content-Type": "application/json", ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+        headers: { "Content-Type": "application/json",  },
         body: JSON.stringify({ first_name: firstName, last_name: lastName, avatar_url: avatarUrl }),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "Update failed");
-      window.dispatchEvent(new CustomEvent("auth-change"));
+      // Re-read the session so the header and other pages see the new name/avatar.
+      void refresh();
       toast({ title: "Saved", description: "Profile updated successfully" });
     } catch (error: any) {
       toast({ title: "Error", description: error.message || "Failed to update profile", variant: "destructive" });
@@ -171,10 +167,9 @@ export default function Profile() {
     }
     setChangingPassword(true);
     try {
-      const token = localStorage.getItem("auth_token");
       const res = await fetch("/api/auth/change-password", {
         method: "POST",
-        headers: { "Content-Type": "application/json", ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+        headers: { "Content-Type": "application/json",  },
         body: JSON.stringify({ currentPassword, newPassword }),
       });
       const data = await res.json();
@@ -230,7 +225,7 @@ export default function Profile() {
 
   if (loading) {
     return (
-      <div className="container mx-auto py-8 px-4">
+      <div className="container mx-auto py-8 px-4" aria-busy="true" aria-label="Loading profile">
         <Card className="max-w-4xl mx-auto">
           <CardHeader>
             <Skeleton className="h-8 w-1/4 mb-2" />
@@ -248,19 +243,21 @@ export default function Profile() {
   const initials = `${(firstName || "?")[0]}${(lastName || "?")[0]}`.toUpperCase();
 
   return (
-    <div className="container mx-auto py-8 px-4 animate-fade-in-up">
+    <div className="container mx-auto py-8 px-4 animate-fade-in-up motion-reduce:animate-none">
       <div className="max-w-4xl mx-auto">
         {/* ── Avatar header ─────────────────────────────────── */}
         <div className="flex flex-col items-center mb-8">
           <div className="relative mb-4">
             <div className="h-20 w-20 rounded-full bg-primary flex items-center justify-center ring-4 ring-background shadow-lg shadow-primary/20">
-              <span className="text-2xl font-bold text-white">{initials}</span>
+              <span className="text-2xl font-bold text-primary-foreground">{initials}</span>
             </div>
             {profile?.is_admin && (
-              <span className="absolute -bottom-1 -right-1 rounded-full bg-primary px-1.5 py-0.5 text-[10px] font-bold text-primary-foreground">ADMIN</span>
+              <span className="absolute -bottom-1 -right-1 rounded-full bg-primary px-1.5 py-0.5 text-label font-bold text-primary-foreground">Admin</span>
             )}
           </div>
-          <h1 className="font-display text-2xl font-bold">{firstName} {lastName}</h1>
+          <h1 className="font-display text-section">
+            {[firstName, lastName].filter(Boolean).join(" ") || email.split("@")[0] || "Your profile"}
+          </h1>
           <p className="text-sm text-muted-foreground">{email}</p>
         </div>
 
@@ -271,10 +268,10 @@ export default function Profile() {
             <TabsTrigger value="security" className="flex-1">Security</TabsTrigger>
           </TabsList>
 
-          <TabsContent value="profile">
+          <TabsContent value="profile" className="space-y-6">
             <Card>
               <CardHeader>
-                <CardTitle>Personal Information</CardTitle>
+                <CardTitle className="font-display text-card-title">Avatar &amp; info</CardTitle>
               </CardHeader>
               <CardContent className="space-y-6">
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
@@ -282,21 +279,46 @@ export default function Profile() {
                     <Label htmlFor="email">Email</Label>
                     <Input
                       id="email"
+                      type="email"
                       value={email}
-                      onChange={(e) => setEmail(e.target.value)}
-                      className="bg-muted"
+                      readOnly
+                      aria-describedby="email-hint"
+                      className="bg-surface-secondary text-muted-foreground"
                     />
+                    <p id="email-hint" className="text-xs text-muted-foreground">
+                      Your sign-in email can't be changed here.
+                    </p>
                   </div>
 
                   {profile?.is_admin && (
                     <div className="flex items-center space-x-2">
-                      <Badge variant="outline" className="bg-primary/10 text-primary">Admin</Badge>
+                      <Badge variant="outline" className="bg-accent text-accent-foreground">Admin</Badge>
                     </div>
                   )}
                 </div>
 
-                <Separator />
+                <div className="space-y-2">
+                  <Label htmlFor="avatarUrl">Avatar URL</Label>
+                  <div className="flex gap-3 items-center">
+                    {avatarUrl && (
+                      <img src={avatarUrl} alt="Avatar" loading="lazy" className="h-10 w-10 rounded-full object-cover ring-2 ring-border" />
+                    )}
+                    <Input
+                      id="avatarUrl"
+                      placeholder="https://example.com/avatar.png"
+                      value={avatarUrl}
+                      onChange={(e) => setAvatarUrl(e.target.value)}
+                    />
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
 
+            <Card>
+              <CardHeader>
+                <CardTitle className="font-display text-card-title">Personal details</CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-6">
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                   <div className="space-y-2">
                     <Label htmlFor="firstName">First Name</Label>
@@ -315,32 +337,21 @@ export default function Profile() {
                     />
                   </div>
                 </div>
+                <Button onClick={updateProfile} disabled={updating} className="w-full sm:w-auto">
+                  {updating ? "Saving..." : "Save Changes"}
+                </Button>
+              </CardContent>
+            </Card>
 
-                <Separator />
-
-                <div className="space-y-2">
-                  <Label htmlFor="avatarUrl">Avatar URL</Label>
-                  <div className="flex gap-3 items-center">
-                    {avatarUrl && (
-                      <img src={avatarUrl} alt="Avatar" loading="lazy" className="h-10 w-10 rounded-full object-cover ring-2 ring-border" />
-                    )}
-                    <Input
-                      id="avatarUrl"
-                      placeholder="https://example.com/avatar.png"
-                      value={avatarUrl}
-                      onChange={(e) => setAvatarUrl(e.target.value)}
-                    />
-                  </div>
-                </div>
-
-                <div className="flex justify-between">
-                  <Button onClick={updateProfile} disabled={updating}>
-                    {updating ? "Saving..." : "Save Changes"}
-                  </Button>
-                  <Button variant="outline" onClick={handleSignOut}>
-                    Sign Out
-                  </Button>
-                </div>
+            <Card className="border-destructive/40">
+              <CardHeader>
+                <CardTitle className="font-display text-card-title text-destructive">Danger zone</CardTitle>
+              </CardHeader>
+              <CardContent className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                <p className="text-sm text-muted-foreground">Sign out of SeatSync on this device.</p>
+                <Button variant="destructive" onClick={handleSignOut} className="w-full sm:w-auto">
+                  Sign Out
+                </Button>
               </CardContent>
             </Card>
           </TabsContent>
@@ -349,7 +360,7 @@ export default function Profile() {
           <TabsContent value="security">
             <Card>
               <CardHeader>
-                <CardTitle>Change Password</CardTitle>
+                <CardTitle className="font-display text-card-title">Change Password</CardTitle>
               </CardHeader>
               <CardContent className="space-y-4 max-w-md">
                 <div className="space-y-2">
@@ -380,15 +391,16 @@ export default function Profile() {
           <TabsContent value="bookings">
             <Card>
               <CardHeader className="pb-2">
-                <CardTitle>Booking History</CardTitle>
+                <CardTitle className="font-display text-card-title">Booking History</CardTitle>
                 <div className="flex flex-wrap gap-2 pt-2">
                   {(["all", "confirmed", "cancelled", "refunded"] as const).map((f) => (
                     <button key={f}
                       onClick={() => setBookingFilter(f)}
-                      className={`text-xs px-3 py-1 rounded-full border transition-colors ${
+                      aria-pressed={bookingFilter === f}
+                      className={`text-xs px-3 py-2 min-h-[44px] sm:min-h-0 sm:py-1 rounded-full border transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${
                         bookingFilter === f
                           ? "bg-primary text-primary-foreground border-primary"
-                          : "bg-background border-border hover:bg-muted"
+                          : "bg-background border-border hover:bg-surface-secondary"
                       }`}>
                       {f.charAt(0).toUpperCase() + f.slice(1)}
                       {f === "all" ? ` (${bookings.length})` : ` (${bookings.filter(b => b.status === f).length})`}
@@ -409,7 +421,7 @@ export default function Profile() {
                   </div>
                 ) : bookings.length === 0 ? (
                   <div className="text-center py-12">
-                    <p className="text-lg mb-2">No bookings found</p>
+                    <p className="font-display text-card-title mb-2">No bookings found</p>
                     <p className="text-muted-foreground mb-6">You haven't booked any events yet</p>
                     <Button onClick={() => navigate("/events")}>Browse Events</Button>
                   </div>
@@ -422,10 +434,10 @@ export default function Profile() {
                         key={booking.id}
                         className={`overflow-hidden border-l-4 transition-all hover:shadow-md ${
                           booking.status === "confirmed"
-                            ? "border-l-green-500"
+                            ? "border-l-success"
                             : booking.status === "cancelled"
-                            ? "border-l-red-400"
-                            : "border-l-amber-400"
+                            ? "border-l-destructive"
+                            : "border-l-warning"
                         }`}
                       >
                         <CardContent className="p-5">
@@ -449,15 +461,15 @@ export default function Profile() {
                               <Badge
                                 className={
                                   booking.status === "confirmed"
-                                    ? "bg-green-100 text-green-800"
+                                    ? "bg-success/10 text-success"
                                     : booking.status === "cancelled"
-                                    ? "bg-red-100 text-red-800"
-                                    : "bg-yellow-100 text-yellow-800"
+                                    ? "bg-destructive/10 text-destructive"
+                                    : "bg-warning/10 text-warning"
                                 }
                               >
                                 {booking.status.charAt(0).toUpperCase() + booking.status.slice(1)}
                               </Badge>
-                              <p className="text-lg font-bold mt-1">
+                              <p className="text-data font-mono mt-1">
                                 {formatPrice(booking.total_price)}
                               </p>
                               <p className="text-xs text-muted-foreground">
@@ -469,7 +481,7 @@ export default function Profile() {
                           <div className="flex items-center justify-between">
                             <p className="text-sm">
                               <span className="font-medium">Seats:</span>{" "}
-                              {formatSeats(booking.seats)}
+                              <span className="font-mono">{formatSeats(booking.seats)}</span>
                             </p>
                             <Button
                               variant="ghost"

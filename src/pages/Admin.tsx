@@ -21,6 +21,7 @@ import { Badge } from "@/components/ui/badge";
 import { Switch } from "@/components/ui/switch";
 import {
   Table,
+  TableCaption,
   TableBody,
   TableCell,
   TableHead,
@@ -44,6 +45,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { useQueryClient } from "@tanstack/react-query";
+import { toLocalDateTimeParts, fromLocalDateTimeParts } from "@/lib/datetime";
 import { 
   BarChart3, 
   Calendar, 
@@ -87,8 +89,6 @@ export default function AdminDashboard() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const { user } = useAuth();
-  const [isAdmin, setIsAdmin] = useState(false);
-  const [loading, setLoading] = useState(true);
   const [events, setEvents] = useState<any[]>([]);
   const [bookings, setBookings] = useState<any[]>([]);
   const [users, setUsers] = useState<any[]>([]);
@@ -183,7 +183,7 @@ export default function AdminDashboard() {
   const [seatCtrlLoading, setSeatCtrlLoading] = useState(false);
   const [isDragging, setIsDragging] = useState(false);
   const [dragStartSeat, setDragStartSeat] = useState<string | null>(null);
-  const [seatCtrlAction, setSeatCtrlAction] = useState<"book" | "vip" | "blocked" | "available">("vip");
+  const [seatCtrlAction, setSeatCtrlAction] = useState<"book" | "vip" | "wheelchair" | "blocked" | "available">("vip");
   const [seatCtrlUserEmail, setSeatCtrlUserEmail] = useState("");
   const [seatCtrlNote, setSeatCtrlNote] = useState("");
 
@@ -202,27 +202,19 @@ export default function AdminDashboard() {
   const [usersPage, setUsersPage] = useState(1);
   const [usersTotalPages, setUsersTotalPages] = useState(1);
 
+  // <RequireAdmin> (App.tsx) only renders this page for a signed-in admin, using the session from
+  // useAuth(). The page used to re-check /api/auth/me itself and read `data.is_admin`, which broke when /me
+  // started answering { user: {...} } and bounced every admin to "/".
   useEffect(() => {
-    if (!user) {
-      navigate("/auth");
-      return;
-    }
-    
-    checkAdmin();
-  }, [user]);
-
-  useEffect(() => {
-    if (!isAdmin) return;
+    if (!user) return;
     // Fire all four initial requests in parallel — previously these ran
     // serially (waterfall) since each was just dispatched then ignored.
     void Promise.allSettled([fetchEvents(), fetchBookings(), fetchUsers(), fetchStats()]);
-  }, [isAdmin]);
+  }, [user]);
 
   const fetchStats = async () => {
     try {
-      const token = localStorage.getItem("auth_token");
       const res = await fetch("/api/admin/stats", {
-        headers: token ? { Authorization: `Bearer ${token}` } : {},
       });
       // Swallowing this silently is how the whole dashboard sat at zero for so
       // long — /api/admin/stats 404'd because the route was never registered
@@ -237,45 +229,13 @@ export default function AdminDashboard() {
     }
   };
 
-  const checkAdmin = async () => {
-    if (!user) return;
-    
-    try {
-      const token = localStorage.getItem("auth_token");
-      const response = await fetch("/api/auth/me", {
-        headers: token ? { Authorization: `Bearer ${token}` } : {},
-      });
-      if (!response.ok) throw new Error("Failed to verify admin status");
-      const data = await response.json();
-
-      if (!data.is_admin) {
-        toast({
-          title: "Access Denied",
-          description: "You don't have permission to access this page",
-          variant: "destructive",
-        });
-        navigate("/");
-        return;
-      }
-
-      setIsAdmin(true);
-    } catch (error: any) {
-      console.error("Error checking admin status:", error);
-      navigate("/");
-    } finally {
-      setLoading(false);
-    }
-  };
-
   const fetchEvents = async () => {
     try {
       console.log("Fetching events for admin dashboard");
-      const token = localStorage.getItem("auth_token");
       // ?fresh=true opts out of the 60s public Cache-Control. The browser
       // cache keys on the URL alone, so without it a re-fetch right after
       // generating seats replayed the pre-generation seat counts.
-      const response = await fetch("/api/events?fresh=true", {
-        headers: token ? { Authorization: `Bearer ${token}` } : {},
+      const response = await fetch("/api/events?fresh=true&include=past", {
       });
       if (!response.ok) {
         console.error("Error fetching events:", response.status);
@@ -297,9 +257,7 @@ export default function AdminDashboard() {
 
   const fetchBookings = async (page = 1) => {
     try {
-      const token = localStorage.getItem("auth_token");
       const response = await fetch(`/api/bookings/admin?page=${page}`, {
-        headers: token ? { Authorization: `Bearer ${token}` } : {},
       });
       if (!response.ok) {
         console.error("Error fetching bookings:", response.status);
@@ -323,9 +281,7 @@ export default function AdminDashboard() {
 
   const fetchUsers = async (page = 1) => {
     try {
-      const token = localStorage.getItem("auth_token");
       const response = await fetch(`/api/auth/users?page=${page}`, {
-        headers: token ? { Authorization: `Bearer ${token}` } : {},
       });
       if (!response.ok) {
         console.error("Error fetching users:", response.status);
@@ -349,9 +305,7 @@ export default function AdminDashboard() {
 
   const fetchEventBookings = async (eventId: string, eventTitle: string) => {
     try {
-      const token = localStorage.getItem("auth_token");
       const response = await fetch(`/api/bookings/admin?eventId=${eventId}&limit=200`, {
-        headers: token ? { Authorization: `Bearer ${token}` } : {},
       });
       if (!response.ok) {
         const err = await response.json().catch(() => ({}));
@@ -381,9 +335,7 @@ export default function AdminDashboard() {
     setExportLoading(eventId);
     
     try {
-      const token = localStorage.getItem("auth_token");
       const response = await fetch(`/api/bookings/export?eventId=${eventId}`, {
-        headers: token ? { Authorization: `Bearer ${token}` } : {},
       });
 
       if (!response.ok) {
@@ -428,9 +380,7 @@ export default function AdminDashboard() {
     }
     setIsGeneratingDesc(true);
     try {
-      const token = localStorage.getItem("auth_token");
       const headers: Record<string, string> = { "Content-Type": "application/json" };
-      if (token) headers["Authorization"] = `Bearer ${token}`;
       const res = await fetch("/api/admin/generate-description", {
         method: "POST",
         headers,
@@ -459,13 +409,10 @@ export default function AdminDashboard() {
     setEventDescription(event.description);
     
     // Format date and time
-    const eventDateTime = new Date(event.date);
-    const dateString = eventDateTime.toISOString().split("T")[0];
-    const hours = eventDateTime.getHours().toString().padStart(2, "0");
-    const minutes = eventDateTime.getMinutes().toString().padStart(2, "0");
-    
+    // Both parts from local fields (the old UTC date + local time split a day in IST).
+    const { date: dateString, time: timeString } = toLocalDateTimeParts(event.date);
     setEventDate(dateString);
-    setEventTime(`${hours}:${minutes}`);
+    setEventTime(timeString);
     
     setEventLocation(event.location);
     setEventPrice(event.price.toString());
@@ -520,7 +467,7 @@ export default function AdminDashboard() {
     
     try {
       // Combine date and time
-      const dateTime = new Date(`${eventDate}T${eventTime}`);
+      const dateTime = fromLocalDateTimeParts(eventDate, eventTime);
 
       // Snap a freshly typed category onto an existing one that differs only
       // by case, so "music" doesn't sit beside "Music" in the Browse-by bar.
@@ -544,9 +491,7 @@ export default function AdminDashboard() {
       
       console.log("Creating event with data:", eventData);
       
-      const token = localStorage.getItem("auth_token");
       const headers: Record<string, string> = { "Content-Type": "application/json" };
-      if (token) headers["Authorization"] = `Bearer ${token}`;
 
       let response: Response;
       if (currentEventId) {
@@ -582,6 +527,7 @@ export default function AdminDashboard() {
       // React Query entry; drop it so a brand-new category shows up as soon
       // as the admin navigates there instead of up to 5 minutes later.
       void queryClient.invalidateQueries({ queryKey: ["events"] });
+      if (currentEventId) void queryClient.invalidateQueries({ queryKey: ["event", currentEventId] });
       setShowEventDialog(false);
     } catch (error: any) {
       console.error("Error saving event:", error);
@@ -599,10 +545,8 @@ export default function AdminDashboard() {
     }
     
     try {
-      const token = localStorage.getItem("auth_token");
       const response = await fetch(`/api/events/${eventId}`, {
         method: "DELETE",
-        headers: token ? { Authorization: `Bearer ${token}` } : {},
       });
       if (!response.ok) {
         const data = await response.json().catch(() => ({}));
@@ -618,6 +562,7 @@ export default function AdminDashboard() {
       fetchBookings();
       void fetchStats();
       void queryClient.invalidateQueries({ queryKey: ["events"] });
+      void queryClient.invalidateQueries({ queryKey: ["event", eventId] });
     } catch (error: any) {
       console.error("Error deleting event:", error);
       toast({
@@ -679,9 +624,7 @@ export default function AdminDashboard() {
 
     setGeneratingSeats(true);
     try {
-      const token = localStorage.getItem("auth_token");
       const headers: Record<string, string> = { "Content-Type": "application/json" };
-      if (token) headers["Authorization"] = `Bearer ${token}`;
 
       // The API handles seat deletion + generation server-side atomically
       const response = await fetch("/api/seats/generate", {
@@ -725,9 +668,7 @@ export default function AdminDashboard() {
   const updateBookingStatus = async (bookingId: string, status: string) => {
     setActionLoading(bookingId);
     try {
-      const token = localStorage.getItem("auth_token");
       const headers: Record<string, string> = { "Content-Type": "application/json" };
-      if (token) headers["Authorization"] = `Bearer ${token}`;
       const response = await fetch("/api/bookings/status", {
         method: "PATCH",
         headers,
@@ -748,9 +689,7 @@ export default function AdminDashboard() {
   const toggleAdminRole = async (userId: string, makeAdmin: boolean) => {
     setActionLoading(userId);
     try {
-      const token = localStorage.getItem("auth_token");
       const headers: Record<string, string> = { "Content-Type": "application/json" };
-      if (token) headers["Authorization"] = `Bearer ${token}`;
       const response = await fetch("/api/auth/update-role", {
         method: "PATCH",
         headers,
@@ -781,9 +720,7 @@ export default function AdminDashboard() {
         date: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString(),
         created_by: user?.id,
       };
-      const token = localStorage.getItem("auth_token");
       const headers: Record<string, string> = { "Content-Type": "application/json" };
-      if (token) headers["Authorization"] = `Bearer ${token}`;
       const response = await fetch("/api/events", {
         method: "POST",
         headers,
@@ -804,9 +741,7 @@ export default function AdminDashboard() {
     if (!confirm(`Reset ALL seats for "${eventTitle}"? This will cancel all bookings.`)) return;
     setActionLoading(eventId + "-reset");
     try {
-      const token = localStorage.getItem("auth_token");
       const headers: Record<string, string> = { "Content-Type": "application/json" };
-      if (token) headers["Authorization"] = `Bearer ${token}`;
       const response = await fetch("/api/seats/reset", {
         method: "POST",
         headers,
@@ -831,9 +766,7 @@ export default function AdminDashboard() {
     setAnalyticsLoading(true);
     setShowAnalyticsDialog(true);
     try {
-      const token = localStorage.getItem("auth_token");
       const res = await fetch(`/api/admin/analytics?eventId=${eventId}`, {
-        headers: token ? { Authorization: `Bearer ${token}` } : {},
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "Failed to load analytics");
@@ -856,9 +789,7 @@ export default function AdminDashboard() {
     setShowSeatControlDialog(true);
     setSeatCtrlLoading(true);
     try {
-      const token = localStorage.getItem("auth_token");
       const res = await fetch(`/api/seats?eventId=${event.id}`, {
-        headers: token ? { Authorization: `Bearer ${token}` } : {},
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "Failed to load seats");
@@ -911,9 +842,7 @@ export default function AdminDashboard() {
   const executeSeatCtrlAction = async () => {
     if (!seatCtrlSelected.length || !seatCtrlEventId) return;
     setSeatCtrlLoading(true);
-    const token = localStorage.getItem("auth_token");
     const headers: Record<string, string> = { "Content-Type": "application/json" };
-    if (token) headers["Authorization"] = `Bearer ${token}`;
     try {
       if (seatCtrlAction === "book") {
         const res = await fetch("/api/admin/booking", {
@@ -966,9 +895,7 @@ export default function AdminDashboard() {
 
   const toggleCheckIn = async (bookingId: string, currentVal: boolean) => {
     setCheckInLoading(bookingId);
-    const token = localStorage.getItem("auth_token");
     const headers: Record<string, string> = { "Content-Type": "application/json" };
-    if (token) headers["Authorization"] = `Bearer ${token}`;
     try {
       const res = await fetch("/api/admin/checkin", {
         method: "PATCH",
@@ -991,9 +918,7 @@ export default function AdminDashboard() {
   const exportUsersCSV = async () => {
     setExportUsersLoading(true);
     try {
-      const token = localStorage.getItem("auth_token");
       const res = await fetch("/api/admin/export-users", {
-        headers: token ? { Authorization: `Bearer ${token}` } : {},
       });
       if (!res.ok) throw new Error("Export failed");
       const blob = await res.blob();
@@ -1019,10 +944,9 @@ export default function AdminDashboard() {
 
   const banUserFromEvent = async (eventId: string, userId: string) => {
     try {
-      const token = localStorage.getItem("auth_token");
       const res = await fetch("/api/admin/event-control", {
         method: "PATCH",
-        headers: { "Content-Type": "application/json", ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+        headers: { "Content-Type": "application/json",  },
         body: JSON.stringify({ eventId, action: "ban_user", userId }),
       });
       const data = await res.json();
@@ -1036,10 +960,9 @@ export default function AdminDashboard() {
 
   const unbanUserFromEvent = async (eventId: string, userId: string) => {
     try {
-      const token = localStorage.getItem("auth_token");
       const res = await fetch("/api/admin/event-control", {
         method: "PATCH",
-        headers: { "Content-Type": "application/json", ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+        headers: { "Content-Type": "application/json",  },
         body: JSON.stringify({ eventId, action: "unban_user", userId }),
       });
       const data = await res.json();
@@ -1063,9 +986,9 @@ export default function AdminDashboard() {
 
   const getPublishStatusBadge = (isPublished: boolean) => {
     return isPublished ? (
-      <Badge className="bg-green-100 text-green-800">Published</Badge>
+      <Badge className="bg-success/10 text-success">Published</Badge>
     ) : (
-      <Badge variant="outline" className="border-amber-300 text-amber-600">
+      <Badge variant="outline" className="border-warning/40 text-warning">
         Draft
       </Badge>
     );
@@ -1086,7 +1009,7 @@ export default function AdminDashboard() {
       Math.min(seatsPerRow, 15);
       
     return (
-      <div className="border p-4 rounded-md bg-gray-50 mt-4">
+      <div className="border p-4 rounded-md bg-surface-secondary mt-4">
         <h4 className="text-center font-semibold mb-2">Seating Preview</h4>
         
         {/*
@@ -1106,15 +1029,15 @@ export default function AdminDashboard() {
 
           return (
             <div className="flex flex-col items-center">
-              <div className="bg-gray-200 w-1/2 mx-auto text-center py-1 text-xs rounded-b-lg mb-3">
+              <div className="bg-muted w-1/2 mx-auto text-center py-1 text-xs rounded-b-lg mb-3">
                 SCREEN
               </div>
 
               {sections.map((section) => (
                 <div key={section.name} className="w-full flex flex-col items-center">
-                  <div className="bg-gray-200 w-3/4 mx-auto text-center py-1 text-xs mb-1">
+                  <div className="bg-muted w-3/4 mx-auto text-center py-1 text-xs mb-1">
                     {section.name}
-                    <span className="text-gray-500">
+                    <span className="text-muted-foreground">
                       {section.surcharge > 0 ? ` · base + ₹${section.surcharge}` : " · base price"}
                     </span>
                   </div>
@@ -1149,13 +1072,13 @@ export default function AdminDashboard() {
               </div>
             ))}
             
-            <div className="bg-gray-200 w-1/2 mx-auto text-center py-1 text-xs rounded-t-lg mt-4">
+            <div className="bg-muted w-1/2 mx-auto text-center py-1 text-xs rounded-t-lg mt-4">
               STAGE
             </div>
           </div>
         )}
         
-        <p className="text-xs text-center mt-4 text-gray-500">
+        <p className="text-xs text-center mt-4 text-muted-foreground">
           This is just a preview. The actual layout will have {customLayout ? numberOfRows : rows.length} rows and {customLayout ? numberOfColumns : seatsPerRow} seats per row.
         </p>
       </div>
@@ -1170,10 +1093,9 @@ export default function AdminDashboard() {
   const toggleHomepageFlag = async (eventId: string, flag: "featured" | "spotlight") => {
     setHomepageToggleLoading(`${eventId}:${flag}`);
     try {
-      const token = localStorage.getItem("auth_token");
       const res = await fetch("/api/admin/event-control", {
         method: "PATCH",
-        headers: { "Content-Type": "application/json", ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+        headers: { "Content-Type": "application/json",  },
         body: JSON.stringify({ eventId, action: flag === "featured" ? "toggle_featured" : "toggle_spotlight" }),
       });
       const data = await res.json();
@@ -1265,25 +1187,13 @@ export default function AdminDashboard() {
     [stats?.revenueByEvent]
   );
 
-  if (loading) {
-    return (
-      <div className="container mx-auto py-8 px-4 text-center">
-        <p>Loading...</p>
-      </div>
-    );
-  }
-
-  if (!isAdmin) {
-    return null; // Will redirect in useEffect
-  }
-
   return (
     <div className="container mx-auto py-8 px-4">
-      <h1 className="font-display text-3xl font-bold mb-2">Admin Dashboard</h1>
+      <h1 className="font-display text-section mb-2">Admin Dashboard</h1>
       <p className="text-muted-foreground mb-6">Manage events, bookings and seats</p>
 
       <Tabs defaultValue="overview" className="w-full">
-        <TabsList className="mb-6">
+        <TabsList className="mb-6 max-w-full justify-start">
           <TabsTrigger value="overview">Overview</TabsTrigger>
           <TabsTrigger value="events">Events</TabsTrigger>
           <TabsTrigger value="homepage">Home page</TabsTrigger>
@@ -1359,7 +1269,7 @@ export default function AdminDashboard() {
                     <XAxis dataKey="date" tick={{ fontSize: 10 }} />
                     <YAxis tick={{ fontSize: 10 }} />
                     <Tooltip />
-                    <Line type="monotone" dataKey="count" stroke="#8884d8" strokeWidth={2} />
+                    <Line type="monotone" dataKey="count" stroke="hsl(var(--primary))" strokeWidth={2} />
                   </LineChart>
                 </ResponsiveContainer>
               </CardContent>
@@ -1376,7 +1286,7 @@ export default function AdminDashboard() {
                     <XAxis dataKey="title" tick={{ fontSize: 10 }} angle={-45} textAnchor="end" height={60} />
                     <YAxis tick={{ fontSize: 10 }} />
                     <Tooltip />
-                    <Bar dataKey="amount" fill="#8884d8" />
+                    <Bar dataKey="amount" fill="hsl(var(--primary))" />
                   </BarChart>
                 </ResponsiveContainer>
               </CardContent>
@@ -1391,9 +1301,9 @@ export default function AdminDashboard() {
               </CardHeader>
               <CardContent className="space-y-3">
                 {([
-                  { label: 'Confirmed', key: 'confirmed', icon: <CheckCircle2 className="h-4 w-4 text-green-500" /> },
-                  { label: 'Cancelled', key: 'cancelled', icon: <XCircle className="h-4 w-4 text-red-500" /> },
-                  { label: 'Pending',   key: 'pending',   icon: <Clock className="h-4 w-4 text-amber-500" /> },
+                  { label: 'Confirmed', key: 'confirmed', icon: <CheckCircle2 className="h-4 w-4 text-success" /> },
+                  { label: 'Cancelled', key: 'cancelled', icon: <XCircle className="h-4 w-4 text-destructive" /> },
+                  { label: 'Pending',   key: 'pending',   icon: <Clock className="h-4 w-4 text-warning" /> },
                 ] as const).map(({ label, key, icon }) => {
                   const count = stats?.bookings[key] ?? bookings.filter((b: any) => b.status === key).length;
                   const total = stats?.bookings.total ?? bookings.length;
@@ -1405,7 +1315,7 @@ export default function AdminDashboard() {
                         <span className="text-sm font-medium">{count} ({pct}%)</span>
                       </div>
                       <div className="h-1.5 w-full bg-muted rounded-full overflow-hidden">
-                        <div className={`h-full rounded-full ${ key === 'confirmed' ? 'bg-green-500' : key === 'cancelled' ? 'bg-red-500' : 'bg-amber-500' }`} style={{ width: `${pct}%` }} />
+                        <div className={`h-full rounded-full ${ key === 'confirmed' ? 'bg-success' : key === 'cancelled' ? 'bg-destructive' : 'bg-warning' }`} style={{ width: `${pct}%` }} />
                       </div>
                     </div>
                   );
@@ -1453,9 +1363,10 @@ export default function AdminDashboard() {
               {bookings.length === 0 ? (
                 <p className="text-sm text-muted-foreground py-4 text-center">No bookings yet</p>
               ) : (
-                <div className="overflow-x-auto">
+                <div className="overflow-auto max-h-[70vh] rounded-xl border">
                   <Table>
-                    <TableHeader>
+                    <TableCaption className="sr-only">Recent bookings</TableCaption>
+                    <TableHeader className="sticky top-0 z-10 bg-card shadow-[0_1px_0_hsl(var(--border))]">
                       <TableRow>
                         <TableHead>Event</TableHead>
                         <TableHead>User</TableHead>
@@ -1469,9 +1380,9 @@ export default function AdminDashboard() {
                         <TableRow key={b._id ?? b.id}>
                           <TableCell className="font-medium text-sm">{b.event?.title ?? b.events?.title ?? '—'}</TableCell>
                           <TableCell className="text-sm">{b.user?.email ?? b.profiles?.email ?? '—'}</TableCell>
-                          <TableCell className="text-sm">{(b.events?.is_free || b.is_free) ? <span className="text-green-600 font-medium">Free</span> : formatPrice(b.total_price ?? 0)}</TableCell>
+                          <TableCell className="text-sm">{(b.events?.is_free || b.is_free) ? <span className="text-success font-medium">Free</span> : formatPrice(b.total_price ?? 0)}</TableCell>
                           <TableCell>
-                            <Badge className={b.status === 'confirmed' ? 'bg-green-100 text-green-800' : b.status === 'cancelled' ? 'bg-red-100 text-red-800' : 'bg-amber-100 text-amber-800'}>
+                            <Badge className={b.status === 'confirmed' ? 'bg-success/10 text-success' : b.status === 'cancelled' ? 'bg-destructive/10 text-destructive' : 'bg-warning/10 text-warning'}>
                               {b.status}
                             </Badge>
                           </TableCell>
@@ -1491,25 +1402,25 @@ export default function AdminDashboard() {
             <Card>
               <CardContent className="p-4">
                 <p className="text-sm text-muted-foreground">Total Events</p>
-                <p className="text-2xl font-bold">{stats?.events.total ?? events.length}</p>
+                <p className="text-data text-2xl font-bold">{stats?.events.total ?? events.length}</p>
               </CardContent>
             </Card>
             <Card>
               <CardContent className="p-4">
                 <p className="text-sm text-muted-foreground">Published</p>
-                <p className="text-2xl font-bold">{stats?.events.published ?? events.filter(e => e.is_published).length}</p>
+                <p className="text-data text-2xl font-bold">{stats?.events.published ?? events.filter(e => e.is_published).length}</p>
               </CardContent>
             </Card>
             <Card>
               <CardContent className="p-4">
                 <p className="text-sm text-muted-foreground">Drafts</p>
-                <p className="text-2xl font-bold">{stats?.events.drafts ?? events.filter(e => !e.is_published).length}</p>
+                <p className="text-data text-2xl font-bold">{stats?.events.drafts ?? events.filter(e => !e.is_published).length}</p>
               </CardContent>
             </Card>
             <Card>
               <CardContent className="p-4">
                 <p className="text-sm text-muted-foreground">Total Bookings</p>
-                <p className="text-2xl font-bold">{stats?.bookings.total ?? bookings.length}</p>
+                <p className="text-data text-2xl font-bold">{stats?.bookings.total ?? bookings.length}</p>
               </CardContent>
             </Card>
           </div>
@@ -1541,9 +1452,10 @@ export default function AdminDashboard() {
                   <Button onClick={openCreateEventDialog}>Create Event</Button>
                 </div>
               ) : (
-                <div className="overflow-x-auto">
+                <div className="overflow-auto max-h-[70vh] rounded-xl border">
                   <Table>
-                    <TableHeader>
+                    <TableCaption className="sr-only">Events</TableCaption>
+                    <TableHeader className="sticky top-0 z-10 bg-card shadow-[0_1px_0_hsl(var(--border))]">
                       <TableRow>
                         <TableHead>Title</TableHead>
                         <TableHead>Date</TableHead>
@@ -1571,6 +1483,7 @@ export default function AdminDashboard() {
                                 size="sm"
                                 variant="outline"
                                 onClick={() => openEditEventDialog(event)}
+                                aria-label={`Edit ${event.title}`}
                                 disabled={!!actionLoading}
                               >
                                 Edit
@@ -1581,10 +1494,9 @@ export default function AdminDashboard() {
                                 onClick={async () => {
                                   setBookingToggleLoading(event.id);
                                   try {
-                                    const token = localStorage.getItem("auth_token");
                                     const res = await fetch("/api/admin/event-control", {
                                       method: "PATCH",
-                                      headers: { "Content-Type": "application/json", ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+                                      headers: { "Content-Type": "application/json",  },
                                       body: JSON.stringify({ eventId: event.id, action: "toggle_bookings" }),
                                     });
                                     const data = await res.json();
@@ -1601,6 +1513,7 @@ export default function AdminDashboard() {
                                 }}
                                 disabled={bookingToggleLoading === event.id}
                                 className="min-w-[130px]"
+                                aria-label={`${event.is_bookings_open !== false ? "Close Bookings" : "Open Bookings"} for ${event.title}`}
                               >
                                 {bookingToggleLoading === event.id
                                   ? "Updating..."
@@ -1612,6 +1525,7 @@ export default function AdminDashboard() {
                                 size="sm"
                                 variant="outline"
                                 onClick={() => openManageSeatsDialog(event)}
+                                aria-label={`Seats for ${event.title}`}
                                 disabled={!!actionLoading}
                               >
                                 Seats
@@ -1620,6 +1534,7 @@ export default function AdminDashboard() {
                                 size="sm"
                                 variant="outline"
                                 onClick={() => navigate(`/admin/bookings?eventId=${event.id}`)}
+                                aria-label={`Bookings for ${event.title}`}
                                 disabled={!!actionLoading}
                               >
                                 <Ticket className="h-4 w-4 mr-1" /> Bookings
@@ -1628,6 +1543,7 @@ export default function AdminDashboard() {
                                 size="sm"
                                 variant="outline"
                                 onClick={() => exportBookingsCSV(event.id, event.title)}
+                                aria-label={`Export CSV for ${event.title}`}
                                 disabled={exportLoading === event.id || !!actionLoading}
                               >
                                 {exportLoading === event.id ? (
@@ -1648,6 +1564,7 @@ export default function AdminDashboard() {
                                 size="sm"
                                 variant="outline"
                                 onClick={() => fetchEventAnalytics(event.id, event.title)}
+                                aria-label={`Analytics for ${event.title}`}
                                 disabled={!!actionLoading}
                               >
                                 Analytics
@@ -1656,6 +1573,7 @@ export default function AdminDashboard() {
                                 size="sm"
                                 variant="outline"
                                 onClick={() => openSeatControl(event)}
+                                aria-label={`Seat Control for ${event.title}`}
                                 disabled={!!actionLoading}
                               >
                                 Seat Control
@@ -1664,6 +1582,7 @@ export default function AdminDashboard() {
                                 size="sm"
                                 variant="outline"
                                 onClick={() => duplicateEvent(event)}
+                                aria-label={`Duplicate ${event.title}`}
                                 disabled={actionLoading === event.id + "-dup"}
                               >
                                 {actionLoading === event.id + "-dup" ? "Copying..." : "Duplicate"}
@@ -1672,6 +1591,7 @@ export default function AdminDashboard() {
                                 size="sm"
                                 variant="outline"
                                 onClick={() => resetEventSeats(event.id, event.title)}
+                                aria-label={`Reset Seats for ${event.title}`}
                                 disabled={actionLoading === event.id + "-reset"}
                               >
                                 {actionLoading === event.id + "-reset" ? "Resetting..." : "Reset Seats"}
@@ -1680,6 +1600,7 @@ export default function AdminDashboard() {
                                 size="sm"
                                 variant="destructive"
                                 onClick={() => deleteEvent(event.id)}
+                                aria-label={`Delete ${event.title}`}
                                 disabled={actionLoading === event.id}
                               >
                                 {actionLoading === event.id ? "Deleting..." : "Delete"}
@@ -1706,7 +1627,7 @@ export default function AdminDashboard() {
 
         <TabsContent value="bookings">
           <div className="flex items-center justify-between mb-4">
-            <h2 className="text-lg font-semibold">Bookings Overview</h2>
+            <h2 className="font-display text-card-title">Bookings Overview</h2>
             <Button size="sm" onClick={() => navigate("/admin/bookings")}>
               Open Full Management →
             </Button>
@@ -1715,13 +1636,13 @@ export default function AdminDashboard() {
             <Card>
               <CardContent className="p-4">
                 <p className="text-sm text-muted-foreground">Total</p>
-                <p className="text-2xl font-bold">{stats?.bookings.total ?? bookings.length}</p>
+                <p className="text-data text-2xl font-bold">{stats?.bookings.total ?? bookings.length}</p>
               </CardContent>
             </Card>
             <Card>
               <CardContent className="p-4">
                 <p className="text-sm text-muted-foreground">Confirmed</p>
-                <p className="text-2xl font-bold text-green-600">
+                <p className="text-data text-2xl font-bold text-success">
                   {stats?.bookings.confirmed ?? bookings.filter(b => b.status === 'confirmed').length}
                 </p>
               </CardContent>
@@ -1729,7 +1650,7 @@ export default function AdminDashboard() {
             <Card>
               <CardContent className="p-4">
                 <p className="text-sm text-muted-foreground">Cancelled</p>
-                <p className="text-2xl font-bold text-red-600">
+                <p className="text-data text-2xl font-bold text-destructive">
                   {stats?.bookings.cancelled ?? bookings.filter(b => b.status === 'cancelled').length}
                 </p>
               </CardContent>
@@ -1737,7 +1658,7 @@ export default function AdminDashboard() {
             <Card>
               <CardContent className="p-4">
                 <p className="text-sm text-muted-foreground">Revenue</p>
-                <p className="text-2xl font-bold">{formatPrice(stats?.bookings.revenue ?? 0)}</p>
+                <p className="text-data text-2xl font-bold">{formatPrice(stats?.bookings.revenue ?? 0)}</p>
               </CardContent>
             </Card>
           </div>
@@ -1763,9 +1684,10 @@ export default function AdminDashboard() {
                   </p>
                 </div>
               ) : (
-                <div className="overflow-x-auto">
+                <div className="overflow-auto max-h-[70vh] rounded-xl border">
                   <Table>
-                    <TableHeader>
+                    <TableCaption className="sr-only">Bookings</TableCaption>
+                    <TableHeader className="sticky top-0 z-10 bg-card shadow-[0_1px_0_hsl(var(--border))]">
                       <TableRow>
                         <TableHead>Booking ID</TableHead>
                         <TableHead>Event</TableHead>
@@ -1787,17 +1709,17 @@ export default function AdminDashboard() {
                             {booking.profiles?.last_name || ""}
                           </TableCell>
                           <TableCell>{formatDate(booking.created_at)}</TableCell>
-                          <TableCell>{(booking.events?.is_free || booking.is_free) ? <span className="text-green-600 font-medium">Free</span> : formatPrice(booking.total_price)}</TableCell>
+                          <TableCell>{(booking.events?.is_free || booking.is_free) ? <span className="text-success font-medium">Free</span> : formatPrice(booking.total_price)}</TableCell>
                           <TableCell>
                             <Badge
                               className={
                                 booking.status === "confirmed"
-                                  ? "bg-green-100 text-green-800"
+                                  ? "bg-success/10 text-success"
                                   : booking.status === "cancelled"
-                                  ? "bg-red-100 text-red-800"
+                                  ? "bg-destructive/10 text-destructive"
                                   : booking.status === "refunded"
-                                  ? "bg-purple-100 text-purple-800"
-                                  : "bg-yellow-100 text-yellow-800"
+                                  ? "bg-accent text-accent-foreground"
+                                  : "bg-warning/10 text-warning"
                               }
                             >
                               {booking.status}
@@ -1807,7 +1729,7 @@ export default function AdminDashboard() {
                             <Button
                               size="sm"
                               variant={booking.checked_in ? "default" : "outline"}
-                              className={booking.checked_in ? "bg-green-600 hover:bg-green-700 text-white" : ""}
+                              className={booking.checked_in ? "bg-success hover:bg-success/90 text-primary-foreground" : ""}
                               onClick={() => toggleCheckIn(booking.id, !!booking.checked_in)}
                               disabled={checkInLoading === booking.id || booking.status !== "confirmed"}
                             >
@@ -1841,13 +1763,13 @@ export default function AdminDashboard() {
             <Card>
               <CardContent className="p-4">
                 <p className="text-sm text-muted-foreground">Total Users</p>
-                <p className="text-2xl font-bold">{stats?.users.total ?? users.length}</p>
+                <p className="text-data text-2xl font-bold">{stats?.users.total ?? users.length}</p>
               </CardContent>
             </Card>
             <Card>
               <CardContent className="p-4">
                 <p className="text-sm text-muted-foreground">Admins</p>
-                <p className="text-2xl font-bold text-primary">
+                <p className="text-data text-2xl font-bold text-primary">
                   {stats?.users.admins ?? users.filter(u => u.is_admin).length}
                 </p>
               </CardContent>
@@ -1855,7 +1777,7 @@ export default function AdminDashboard() {
             <Card>
               <CardContent className="p-4">
                 <p className="text-sm text-muted-foreground">New This Month</p>
-                <p className="text-2xl font-bold">{stats?.users.newThisMonth ?? 0}</p>
+                <p className="text-data text-2xl font-bold">{stats?.users.newThisMonth ?? 0}</p>
               </CardContent>
             </Card>
           </div>
@@ -1895,9 +1817,10 @@ export default function AdminDashboard() {
                   </p>
                 </div>
               ) : (
-                <div className="overflow-x-auto">
+                <div className="overflow-auto max-h-[70vh] rounded-xl border">
                   <Table>
-                    <TableHeader>
+                    <TableCaption className="sr-only">Users</TableCaption>
+                    <TableHeader className="sticky top-0 z-10 bg-card shadow-[0_1px_0_hsl(var(--border))]">
                       <TableRow>
                         <TableHead>User ID</TableHead>
                         <TableHead>Name</TableHead>
@@ -1926,7 +1849,7 @@ export default function AdminDashboard() {
                           <TableCell className="text-sm">{formatDate(u.created_at)}</TableCell>
                           <TableCell>
                             {u.is_admin ? (
-                              <Badge className="bg-blue-100 text-blue-800">Admin</Badge>
+                              <Badge className="bg-accent text-accent-foreground">Admin</Badge>
                             ) : (
                               <Badge variant="outline">User</Badge>
                             )}
@@ -1937,6 +1860,7 @@ export default function AdminDashboard() {
                                 size="sm"
                                 variant="outline"
                                 onClick={() => { setBanContext({ userId: u.id, userEmail: u.email }); setShowBanDialog(true); }}
+                                aria-label={`Ban from Event: ${u.email}`}
                                 disabled={!!actionLoading}
                               >
                                 Ban from Event
@@ -1945,6 +1869,7 @@ export default function AdminDashboard() {
                                 size="sm"
                                 variant={u.is_admin ? "destructive" : "outline"}
                                 onClick={() => toggleAdminRole(u.id, !u.is_admin)}
+                                aria-label={`${u.is_admin ? "Remove Admin" : "Make Admin"}: ${u.email}`}
                                 disabled={u.id === user?.id || actionLoading === u.id}
                               >
                                 {actionLoading === u.id ? "Saving…" : u.is_admin ? "Remove Admin" : "Make Admin"}
@@ -1953,6 +1878,7 @@ export default function AdminDashboard() {
                                 size="sm"
                                 variant="outline"
                                 onClick={() => { setSelectedUser(u); setShowUserDialog(true); }}
+                                aria-label={`View ${u.email}`}
                               >
                                 View
                               </Button>
@@ -2235,7 +2161,8 @@ export default function AdminDashboard() {
                         <button
                           type="button"
                           onClick={() => setNumberOfRows(Math.max(3, numberOfRows - 1))}
-                          className="p-1 rounded-md bg-gray-100 hover:bg-gray-200"
+                          aria-label="Decrease number of rows"
+                          className="p-1.5 min-h-8 min-w-8 rounded-md bg-surface-elevated hover:bg-muted"
                         >
                           <Minus className="h-3 w-3" />
                         </button>
@@ -2251,7 +2178,8 @@ export default function AdminDashboard() {
                         <button
                           type="button"
                           onClick={() => setNumberOfRows(numberOfRows + 1)}
-                          className="p-1 rounded-md bg-gray-100 hover:bg-gray-200"
+                          aria-label="Increase number of rows"
+                          className="p-1.5 min-h-8 min-w-8 rounded-md bg-surface-elevated hover:bg-muted"
                         >
                           <Plus className="h-3 w-3" />
                         </button>
@@ -2265,7 +2193,7 @@ export default function AdminDashboard() {
                         <button
                           type="button"
                           onClick={() => setNumberOfColumns(Math.max(5, numberOfColumns - 1))}
-                          className="p-1 rounded-md bg-gray-100 hover:bg-gray-200"
+                          className="p-1.5 min-h-8 min-w-8 rounded-md bg-surface-elevated hover:bg-muted"
                         >
                           <Minus className="h-3 w-3" />
                         </button>
@@ -2281,7 +2209,7 @@ export default function AdminDashboard() {
                         <button
                           type="button"
                           onClick={() => setNumberOfColumns(numberOfColumns + 1)}
-                          className="p-1 rounded-md bg-gray-100 hover:bg-gray-200"
+                          className="p-1.5 min-h-8 min-w-8 rounded-md bg-surface-elevated hover:bg-muted"
                         >
                           <Plus className="h-3 w-3" />
                         </button>
@@ -2291,7 +2219,7 @@ export default function AdminDashboard() {
                 </div>
                 <div>
                   <Label htmlFor="seatPrice">Base price per seat (₹)</Label>
-                  <div className="text-xs text-gray-500 mb-1">
+                  <div className="text-xs text-muted-foreground mb-1">
                     Front section: Base price + ₹5, Back section: Base price + ₹2, Balcony: Base price
                   </div>
                   <Input
@@ -2309,9 +2237,9 @@ export default function AdminDashboard() {
                 <Separator />
 
                 <div className="flex items-center justify-between">
-                  <span className="text-sm font-medium">Layout Preview</span>
+                  <Label htmlFor="previewVisible-1" className="text-sm font-medium">Layout Preview</Label>
                   <Switch
-                    id="previewVisible"
+                    id="previewVisible-1"
                     checked={previewVisible}
                     onCheckedChange={setPreviewVisible}
                   />
@@ -2319,12 +2247,12 @@ export default function AdminDashboard() {
 
                 {renderSeatPreview()}
 
-                <div className="text-center p-2 bg-gray-50 rounded-md">
+                <div className="text-center p-2 bg-surface-secondary rounded-md">
                   <p className="text-lg font-medium mb-1">Total Seats</p>
                   <p className="mb-1 text-2xl font-bold">
                     {numberOfRows * numberOfColumns}
                   </p>
-                  <p className="text-xs text-gray-500">
+                  <p className="text-xs text-muted-foreground">
                     This will create {numberOfRows} rows × {numberOfColumns} columns = {numberOfRows * numberOfColumns} seats
                   </p>
                 </div>
@@ -2347,7 +2275,8 @@ export default function AdminDashboard() {
                     <button
                       type="button"
                       onClick={() => setSeatsPerRow(Math.max(5, seatsPerRow - 1))}
-                      className="p-1 rounded-md bg-gray-100 hover:bg-gray-200"
+                      aria-label="Decrease seats per row"
+                          className="p-1.5 min-h-8 min-w-8 rounded-md bg-surface-elevated hover:bg-muted"
                     >
                       <Minus className="h-3 w-3" />
                     </button>
@@ -2363,7 +2292,8 @@ export default function AdminDashboard() {
                     <button
                       type="button"
                       onClick={() => setSeatsPerRow(seatsPerRow + 1)}
-                      className="p-1 rounded-md bg-gray-100 hover:bg-gray-200"
+                      aria-label="Increase seats per row"
+                          className="p-1.5 min-h-8 min-w-8 rounded-md bg-surface-elevated hover:bg-muted"
                     >
                       <Plus className="h-3 w-3" />
                     </button>
@@ -2386,9 +2316,9 @@ export default function AdminDashboard() {
                 <Separator />
                 
                 <div className="flex items-center justify-between">
-                  <span className="text-sm font-medium">Layout Preview</span>
+                  <Label htmlFor="previewVisible-2" className="text-sm font-medium">Layout Preview</Label>
                   <Switch
-                    id="previewVisible"
+                    id="previewVisible-2"
                     checked={previewVisible}
                     onCheckedChange={setPreviewVisible}
                   />
@@ -2396,12 +2326,12 @@ export default function AdminDashboard() {
 
                 {renderSeatPreview()}
                 
-                <div className="text-center p-2 bg-gray-50 rounded-md">
+                <div className="text-center p-2 bg-surface-secondary rounded-md">
                   <p className="text-lg font-medium mb-1">Total Seats</p>
                   <p className="mb-1 text-2xl font-bold">
                     {rows.length * seatsPerRow}
                   </p>
-                  <p className="text-xs text-gray-500">
+                  <p className="text-xs text-muted-foreground">
                     This will create {rows.length} rows × {seatsPerRow} seats = {rows.length * seatsPerRow} seats
                   </p>
                 </div>
@@ -2442,6 +2372,7 @@ export default function AdminDashboard() {
               </div>
             ) : (
               <Table>
+                <TableCaption className="sr-only">Bookings for this event</TableCaption>
                 <TableHeader>
                   <TableRow>
                     <TableHead>Booking ID</TableHead>
@@ -2464,15 +2395,15 @@ export default function AdminDashboard() {
                       </TableCell>
                       <TableCell>{booking.profiles?.email || "Unknown"}</TableCell>
                       <TableCell>{formatDate(booking.created_at)}</TableCell>
-                      <TableCell>{(booking.events?.is_free || booking.is_free) ? <span className="text-green-600 font-medium">Free</span> : formatPrice(booking.total_price)}</TableCell>
+                      <TableCell>{(booking.events?.is_free || booking.is_free) ? <span className="text-success font-medium">Free</span> : formatPrice(booking.total_price)}</TableCell>
                       <TableCell>
                         <Badge
                           className={
                             booking.status === "confirmed"
-                              ? "bg-green-100 text-green-800"
+                              ? "bg-success/10 text-success"
                               : booking.status === "cancelled"
-                              ? "bg-red-100 text-red-800"
-                              : "bg-yellow-100 text-yellow-800"
+                              ? "bg-destructive/10 text-destructive"
+                              : "bg-warning/10 text-warning"
                           }
                         >
                           {booking.status}
@@ -2513,6 +2444,7 @@ export default function AdminDashboard() {
                   { label: "Booked",         value: analyticsData.booked_seats },
                   { label: "Occupancy",      value: `${analyticsData.occupancy_pct}%` },
                   { label: "VIP Seats",      value: analyticsData.vip_seats },
+                  { label: "Wheelchair",     value: analyticsData.wheelchair_seats ?? 0 },
                   { label: "Blocked",        value: analyticsData.blocked_seats },
                   { label: "Checked In",     value: analyticsData.checked_in },
                   { label: "Revenue",        value: formatPrice(analyticsData.revenue ?? 0) },
@@ -2529,8 +2461,8 @@ export default function AdminDashboard() {
                 <p className="text-sm font-semibold mb-2">Booking Breakdown</p>
                 <div className="space-y-2">
                   {[
-                    { label: "Confirmed", count: analyticsData.confirmed_bookings, color: "bg-green-500" },
-                    { label: "Cancelled", count: analyticsData.cancelled_bookings, color: "bg-red-500" },
+                    { label: "Confirmed", count: analyticsData.confirmed_bookings, color: "bg-success" },
+                    { label: "Cancelled", count: analyticsData.cancelled_bookings, color: "bg-destructive" },
                   ].map(({ label, count, color }) => {
                     const pct = analyticsData.total_bookings > 0 ? Math.round((count / analyticsData.total_bookings) * 100) : 0;
                     return (
@@ -2576,6 +2508,7 @@ export default function AdminDashboard() {
                 <div>
                   <p className="text-sm font-semibold mb-2">Most Active Attendees</p>
                   <Table>
+                    <TableCaption className="sr-only">Event analytics</TableCaption>
                     <TableHeader>
                       <TableRow>
                         <TableHead>Name</TableHead>
@@ -2627,12 +2560,12 @@ export default function AdminDashboard() {
                   {/* Legend */}
                   <div className="flex flex-wrap gap-2 mb-3 text-xs">
                     {[
-                      { label: "Available", cls: "bg-green-100 border-green-400 text-green-800" },
-                      { label: "Booked",    cls: "bg-red-100 border-red-400 text-red-700" },
-                      { label: "Reserved",  cls: "bg-amber-100 border-amber-400 text-amber-800" },
-                      { label: "VIP",       cls: "bg-purple-100 border-purple-400 text-purple-800" },
-                      { label: "Blocked",   cls: "bg-gray-200 border-gray-400 text-gray-600" },
-                      { label: "Selected",  cls: "bg-blue-500 border-blue-600 text-white" },
+                      { label: "Available", cls: "bg-success/10 border-success/40 text-success" },
+                      { label: "Booked",    cls: "bg-destructive/10 border-destructive/40 text-destructive" },
+                      { label: "Reserved",  cls: "bg-warning/10 border-warning/40 text-warning" },
+                      { label: "VIP",       cls: "bg-accent border-primary/40 text-accent-foreground" },
+                      { label: "Blocked",   cls: "bg-muted border-border text-muted-foreground" },
+                      { label: "Selected",  cls: "bg-primary border-primary text-primary-foreground" },
                     ].map(({ label, cls }) => (
                       <span key={label} className={`border rounded px-2 py-0.5 font-medium ${cls}`}>{label}</span>
                     ))}
@@ -2647,12 +2580,13 @@ export default function AdminDashboard() {
                         <div className="flex flex-wrap gap-1">
                           {seats.sort((a, b) => a.number - b.number).map((s) => {
                             const isSelected = seatCtrlSelected.includes(s._id ?? s.id);
-                            let cls = "bg-green-100 border-green-400 text-green-800";
-                            if (isSelected) cls = "bg-blue-500 border-blue-600 text-white";
-                            else if (s.status === "booked") cls = "bg-red-100 border-red-400 text-red-700";
-                            else if (s.seat_type === "vip") cls = "bg-purple-100 border-purple-400 text-purple-800";
-                            else if (s.seat_type === "blocked") cls = "bg-gray-200 border-gray-400 text-gray-600";
-                            else if (s.status === "reserved") cls = "bg-amber-100 border-amber-400 text-amber-800";
+                            let cls = "bg-success/10 border-success/40 text-success";
+                            if (isSelected) cls = "bg-primary border-primary text-primary-foreground";
+                            else if (s.status === "booked") cls = "bg-destructive/10 border-destructive/40 text-destructive";
+                            else if (s.seat_type === "vip") cls = "bg-accent border-primary/40 text-accent-foreground";
+                            else if (s.seat_type === "wheelchair") cls = "bg-seat-standard/15 border-seat-standard/50 text-foreground";
+                            else if (s.seat_type === "blocked") cls = "bg-muted border-border text-muted-foreground";
+                            else if (s.status === "reserved") cls = "bg-warning/10 border-warning/40 text-warning";
                             return (
                               <button
                                 key={s._id ?? s.id}
@@ -2661,6 +2595,7 @@ export default function AdminDashboard() {
                                 className={`border rounded text-xs px-1.5 py-0.5 font-medium transition-colors ${cls}`}
                                 title={`${s.row}${s.number} — ${s.seat_type} / ${s.status}`}
                               >
+                                {s.seat_type === "wheelchair" ? <span aria-hidden="true">♿</span> : null}
                                 {s.number}
                               </button>
                             );
@@ -2688,6 +2623,7 @@ export default function AdminDashboard() {
                 >
                   <option value="book">Book for User</option>
                   <option value="vip">Mark as VIP</option>
+                  <option value="wheelchair">Mark as Wheelchair space</option>
                   <option value="blocked">Mark as Blocked</option>
                   <option value="available">Reset to Available</option>
                 </select>
@@ -2814,7 +2750,7 @@ export default function AdminDashboard() {
               </div>
               <div>
                 <Label>Role</Label>
-                <Badge className={selectedUser.is_admin ? "bg-blue-100 text-blue-800" : ""}>
+                <Badge className={selectedUser.is_admin ? "bg-accent text-accent-foreground" : ""}>
                   {selectedUser.is_admin ? "Admin" : "User"}
                 </Badge>
               </div>

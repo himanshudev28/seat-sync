@@ -2,21 +2,18 @@ import { useState, useEffect, useCallback, lazy, Suspense } from "react";
 import { Link, useNavigate, useLocation } from "react-router-dom";
 import { useAuth } from "@/providers/AuthProvider";
 import { ThemeToggle } from "@/components/ui/ThemeToggle";
-import { Tickets, Menu, X, User, LogOut, LayoutDashboard, BookOpen } from "lucide-react";
+import { Menu, X } from "lucide-react";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuLabel,
-  DropdownMenuSeparator,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
 
 // Mobile menu uses framer-motion (~120 KB gzipped 42 KB). Only ~5–10% of
 // homepage visitors ever open the menu on mobile, so don't pay that cost on
 // initial paint — load the chunk on the first menu toggle.
 const MobileMenu = lazy(() => import("./MobileMenu"));
+
+// The account dropdown (Radix DropdownMenu + floating-ui) is also off the entry chunk. The
+// trigger is a plain button until the first click; hover/focus prefetch the chunk.
+const loadUserMenu = () => import("./HeaderUserMenu");
+const HeaderUserMenu = lazy(loadUserMenu);
 
 const NAV_LINKS = [
   { to: "/events", label: "Events" },
@@ -30,6 +27,38 @@ export default function Header() {
   const [scrolled, setScrolled] = useState(false);
 
   const isAdmin = profile?.is_admin ?? false;
+  const [userMenuActive, setUserMenuActive] = useState(false);
+
+  // Same markup/aria Radix's Trigger renders; once the lazy menu mounts, Trigger clones this
+  // element and takes over (open state, aria-expanded, key handling).
+  const userMenuTrigger = user ? (
+    <button
+      type="button"
+      aria-label="Account menu"
+      {...(userMenuActive ? {} : { "aria-haspopup": "menu" as const, "aria-expanded": false, "data-state": "closed" })}
+      onPointerEnter={() => void loadUserMenu()}
+      onFocus={() => void loadUserMenu()}
+      onClick={userMenuActive ? undefined : () => setUserMenuActive(true)}
+      onKeyDown={
+        userMenuActive
+          ? undefined
+          : (e) => {
+              if (e.key === "ArrowDown") {
+                e.preventDefault();
+                setUserMenuActive(true);
+              }
+            }
+      }
+      className="rounded-full outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background ml-2 transition-transform duration-150 hover:scale-105 active:scale-95"
+    >
+      <Avatar className="h-9 w-9 border border-border shadow-sm">
+        <AvatarImage src={profile?.avatar_url || ""} />
+        <AvatarFallback className="bg-primary/10 text-primary font-semibold">
+          {user.email?.charAt(0).toUpperCase() || "U"}
+        </AvatarFallback>
+      </Avatar>
+    </button>
+  ) : null;
 
   // Scroll shadow effect — rAF-throttled and only sets state on threshold crossing
   // to avoid a state churn (and re-render) on every scroll event.
@@ -93,7 +122,7 @@ export default function Header() {
             </Link>
 
             {/* ── Desktop Nav ───────────────────────────────────── */}
-            <nav className="hidden md:flex items-center gap-1">
+            <nav aria-label="Main" className="hidden md:flex items-center gap-1">
               {[
                 ...NAV_LINKS,
                 ...(user ? [{ to: "/tickets", label: "My Tickets" }] : []),
@@ -102,7 +131,8 @@ export default function Header() {
                 <Link
                   key={to}
                   to={to}
-                  className={`relative px-4 py-2 text-sm font-medium transition-colors duration-200
+                  aria-current={isActive(to) ? "page" : undefined}
+                  className={`relative rounded-full px-4 py-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring text-sm font-medium transition-colors duration-200
                     after:content-[''] after:absolute after:bottom-1.5 after:left-1/2 after:h-0.5 after:bg-primary after:transition-all after:duration-200
                     ${
                       isActive(to)
@@ -120,61 +150,29 @@ export default function Header() {
               <ThemeToggle />
               {user ? (
                 <div className="flex items-center gap-2">
-                  <DropdownMenu>
-                    <DropdownMenuTrigger asChild>
-                      <button className="rounded-full outline-none focus-visible:ring-2 focus-visible:ring-primary/50 focus-visible:ring-offset-2 focus-visible:ring-offset-background ml-2 transition-transform duration-150 hover:scale-105 active:scale-95">
-                        <Avatar className="h-9 w-9 border border-border shadow-sm">
-                          <AvatarImage src={profile?.avatar_url || ""} />
-                          <AvatarFallback className="bg-primary/10 text-primary font-semibold">
-                            {user.email?.charAt(0).toUpperCase() || "U"}
-                          </AvatarFallback>
-                        </Avatar>
-                      </button>
-                    </DropdownMenuTrigger>
-                    <DropdownMenuContent align="end" className="w-56 rounded-xl p-2 bg-background/95 backdrop-blur-xl border border-border shadow-2xl mt-2">
-                      <DropdownMenuLabel className="font-normal px-2 py-1.5">
-                        <div className="flex flex-col space-y-1">
-                          <p className="text-sm font-semibold leading-none">{[profile?.first_name, profile?.last_name].filter(Boolean).join(" ") || "User"}</p>
-                          <p className="text-xs leading-none text-muted-foreground truncate">
-                            {user.email}
-                          </p>
-                        </div>
-                      </DropdownMenuLabel>
-                      <DropdownMenuSeparator className="bg-border/50 my-1" />
-                      <DropdownMenuItem onClick={() => navigate("/tickets")} className="rounded-lg cursor-pointer flex items-center gap-2 py-2 px-2 hover:bg-muted/60 transition-colors">
-                        <Tickets className="h-4 w-4 text-muted-foreground" />
-                        <span className="font-medium">My Tickets</span>
-                      </DropdownMenuItem>
-                      <DropdownMenuItem onClick={() => navigate("/profile")} className="rounded-lg cursor-pointer flex items-center gap-2 py-2 px-2 hover:bg-muted/60 transition-colors">
-                        <User className="h-4 w-4 text-muted-foreground" />
-                        <span className="font-medium">Profile</span>
-                      </DropdownMenuItem>
-                      {isAdmin && (
-                        <>
-                          <DropdownMenuItem onClick={() => navigate("/admin")} className="rounded-lg cursor-pointer flex items-center gap-2 py-2 px-2 hover:bg-muted/60 transition-colors">
-                            <LayoutDashboard className="h-4 w-4 text-muted-foreground" />
-                            <span className="font-medium">Admin Dashboard</span>
-                          </DropdownMenuItem>
-                          <DropdownMenuItem onClick={() => navigate("/admin/bookings")} className="rounded-lg cursor-pointer flex items-center gap-2 py-2 px-2 hover:bg-muted/60 transition-colors">
-                            <BookOpen className="h-4 w-4 text-muted-foreground" />
-                            <span className="font-medium">Manage Bookings</span>
-                          </DropdownMenuItem>
-                        </>
-                      )}
-                      <DropdownMenuSeparator className="bg-border/50 my-1" />
-                      <DropdownMenuItem onClick={handleSignOut} className="rounded-lg cursor-pointer flex items-center gap-2 py-2 px-2 text-destructive focus:text-destructive focus:bg-destructive/10 transition-colors">
-                        <LogOut className="h-4 w-4" />
-                        <span className="font-medium">Sign Out</span>
-                      </DropdownMenuItem>
-                    </DropdownMenuContent>
-                  </DropdownMenu>
+                  {userMenuActive ? (
+                    // Fallback is the same inert button, so there is no flicker while the chunk loads.
+                    <Suspense fallback={userMenuTrigger}>
+                      <HeaderUserMenu
+                        trigger={userMenuTrigger}
+                        email={user.email}
+                        firstName={profile?.first_name}
+                        lastName={profile?.last_name}
+                        isAdmin={isAdmin}
+                        onNavigate={navigate}
+                        onSignOut={handleSignOut}
+                      />
+                    </Suspense>
+                  ) : (
+                    userMenuTrigger
+                  )}
                 </div>
               ) : !isActive("/auth") && (
                 // On /auth the page already owns the sign-in action — a second
                 // "Sign In" button in the header is just noise.
                 <button
                   onClick={() => navigate("/auth")}
-                  className="bg-primary text-primary-foreground rounded-full px-5 py-2 text-sm font-semibold shadow-sm hover:bg-primary/90 active:scale-95 transition-all duration-200"
+                  className="bg-primary text-primary-foreground rounded-full px-5 py-2 text-sm font-semibold shadow-sm hover:bg-primary/90 active:scale-95 motion-reduce:transform-none transition-all duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
                 >
                   Sign In
                 </button>
@@ -186,13 +184,15 @@ export default function Header() {
               <ThemeToggle />
               <button
                 onClick={() => setIsMenuOpen((v) => !v)}
-                className="h-9 w-9 rounded-xl border border-border flex items-center justify-center text-foreground hover:bg-muted/60 active:scale-95 transition-all duration-150"
-                aria-label="Toggle menu"
+                className="h-11 w-11 rounded-xl border border-border flex items-center justify-center text-foreground hover:bg-muted/60 active:scale-95 motion-reduce:transform-none transition-all duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                aria-label={isMenuOpen ? "Close menu" : "Open menu"}
+                aria-expanded={isMenuOpen}
+                aria-controls="mobile-menu"
               >
                 {isMenuOpen ? (
-                  <X className="h-4 w-4" />
+                  <X aria-hidden="true" className="h-4 w-4" />
                 ) : (
-                  <Menu className="h-4 w-4" />
+                  <Menu aria-hidden="true" className="h-4 w-4" />
                 )}
               </button>
             </div>

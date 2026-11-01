@@ -1,91 +1,80 @@
 /**
  * /auth/callback
  *
- * After Google OAuth, the server redirects here with the JWT in the URL hash:
- *   /auth/callback#token=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
- *
- * This page extracts the token, stores it, fires the auth-change event,
- * and redirects the user to the home page.
+ * After Google OAuth the server sets the HttpOnly session cookie and redirects here (no token in
+ * the URL). We confirm the session with /api/auth/me and go home; errors arrive as ?error=<code>.
  */
-import { useEffect, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useEffect, useRef, useState } from "react";
+import { Link, useNavigate } from "react-router-dom";
+import { AlertCircle, Loader2 } from "lucide-react";
+import { Button } from "@/components/ui/button";
 import { toast } from "@/components/ui/use-toast";
+import { useAuth } from "@/providers/AuthProvider";
+import { OAUTH_ERRORS } from "@/components/authErrors";
+
 
 export default function AuthCallback() {
   const navigate = useNavigate();
+  const { refresh } = useAuth();
   const [status, setStatus] = useState<"loading" | "error">("loading");
   const [errorMsg, setErrorMsg] = useState("");
+  const started = useRef(false);
 
   useEffect(() => {
-    const hash   = window.location.hash;    // e.g. "#token=xxx"
-    const search = window.location.search;  // e.g. "?error=..."
-
-    // ── Error from OAuth flow ──────────────────────────────────────────────────
-    const params = new URLSearchParams(search);
-    const oauthError = params.get("error");
-    if (oauthError) {
-      const messages: Record<string, string> = {
-        google_not_configured: "Google OAuth is not configured on this server.",
-        token_exchange_failed: "Failed to exchange Google token. Please try again.",
-        userinfo_failed:       "Failed to fetch Google profile. Please try again.",
-        email_not_verified:    "Your Google email is not verified. Please verify it first.",
-        server_error:          "An unexpected server error occurred.",
-        no_code:               "Google login was cancelled.",
-        access_denied:         "You cancelled the Google login.",
-      };
-      const msg = messages[oauthError] || `Google login failed: ${oauthError}`;
+    // StrictMode runs effects twice in dev; one sign-in check is enough.
+    if (started.current) return;
+    started.current = true;
+    const fail = (msg: string) => {
       setErrorMsg(msg);
       setStatus("error");
       toast({ title: "Sign in failed", description: msg, variant: "destructive" });
-      setTimeout(() => navigate("/auth"), 3000);
-      return;
-    }
-
-    // ── Success: extract token from hash ──────────────────────────────────────
-    const hashParams = new URLSearchParams(hash.replace("#", "?"));
-    const token = hashParams.get("token");
-
-    if (!token) {
-      setErrorMsg("No token received from Google. Please try again.");
-      setStatus("error");
+      // Not cleared on cleanup: StrictMode's dev re-run returns early and must not cancel it.
       setTimeout(() => navigate("/auth", { replace: true }), 3000);
+    };
+
+    const oauthError = new URLSearchParams(window.location.search).get("error");
+    if (oauthError) {
+      fail(OAUTH_ERRORS[oauthError] ?? `Google login failed: ${oauthError}`);
       return;
     }
 
-    // Prevent double execution in React Strict Mode
-    if (localStorage.getItem("auth_token") === token) {
-      return;
-    }
-
-    // Store token and notify app
-    localStorage.setItem("auth_token", token);
-    window.dispatchEvent(new CustomEvent("auth-change"));
-
-    toast({
-      title: "Signed in with Google 🎉",
-      description: "Welcome to SeatSync!",
+    void refresh().then((signedIn) => {
+      if (!signedIn) {
+        fail("We couldn't confirm your Google sign-in. Please try again.");
+        return;
+      }
+      toast({ title: "Signed in with Google 🎉", description: "Welcome to SeatSync!" });
+      navigate("/", { replace: true });
     });
-
-    // Navigate to home using React Router instead of hard reload
-    navigate("/", { replace: true });
-  }, [navigate]);
+  }, [navigate, refresh]);
 
   return (
-    <div className="flex flex-col items-center justify-center min-h-[60vh] gap-4">
-      {status === "loading" ? (
-        <>
-          <div className="h-12 w-12 rounded-full border-4 border-primary border-t-transparent animate-spin" />
-          <p className="text-muted-foreground text-sm">Completing Google sign-in…</p>
-        </>
-      ) : (
-        <>
-          <div className="h-12 w-12 rounded-full bg-destructive/10 flex items-center justify-center">
-            <span className="text-2xl">✗</span>
+    <main className="flex min-h-[60vh] items-center justify-center px-4">
+      <div
+        className="w-full max-w-sm rounded-2xl border border-border bg-card p-8 text-center text-card-foreground"
+        role={status === "error" ? "alert" : "status"}
+        aria-live="polite"
+      >
+        {status === "loading" ? (
+          <div className="flex flex-col items-center gap-4">
+            <Loader2 className="h-10 w-10 animate-spin text-primary motion-reduce:animate-none" aria-hidden="true" />
+            <h1 className="font-display text-card-title">Signing you in</h1>
+            <p className="text-sm text-muted-foreground">Completing Google sign-in. This only takes a moment.</p>
           </div>
-          <p className="text-destructive font-medium">{errorMsg}</p>
-          <p className="text-muted-foreground text-sm">Redirecting to login…</p>
-        </>
-      )}
-    </div>
+        ) : (
+          <div className="flex flex-col items-center gap-4">
+            <div className="flex h-12 w-12 items-center justify-center rounded-full bg-destructive/10">
+              <AlertCircle className="h-6 w-6 text-destructive" aria-hidden="true" />
+            </div>
+            <h1 className="font-display text-card-title">Sign in failed</h1>
+            <p className="text-sm text-destructive">{errorMsg}</p>
+            <p className="text-sm text-muted-foreground">Taking you back to sign in…</p>
+            <Button asChild className="w-full">
+              <Link to="/auth">Back to sign in</Link>
+            </Button>
+          </div>
+        )}
+      </div>
+    </main>
   );
 }

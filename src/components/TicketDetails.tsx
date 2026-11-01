@@ -1,11 +1,9 @@
 
 import { memo } from "react";
-import { useNavigate } from "react-router-dom";
-import { Card, CardContent } from "@/components/ui/card";
+import { Link, useNavigate } from "react-router-dom";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Separator } from "@/components/ui/separator";
-import { Ticket } from "lucide-react";
+import { Ticket, CheckCircle2, XCircle, Clock, MapPin, CalendarDays } from "lucide-react";
 import { formatPrice } from "@/lib/utils";
 
 type TicketProps = {
@@ -60,67 +58,72 @@ const TicketDetails = ({ booking }: TicketProps) => {
       .join(", ");
   };
 
+  const statusMeta =
+    booking.status === "confirmed"
+      ? { Icon: CheckCircle2, cls: "bg-success/10 text-success border-success/30" }
+      : booking.status === "cancelled"
+      ? { Icon: XCircle, cls: "bg-destructive/10 text-destructive border-destructive/30" }
+      : { Icon: Clock, cls: "bg-warning/10 text-warning border-warning/30" };
+  const StatusIcon = statusMeta.Icon;
+  const seatLabel = formatSeats(booking.seats);
+
   return (
-    <Card key={booking.id}>
-      <CardContent className="p-6">
-        <div className="flex flex-col sm:flex-row justify-between gap-4 mb-4">
+    <article
+      key={booking.id}
+      className="flex flex-col sm:flex-row overflow-hidden rounded-2xl border border-border bg-card text-card-foreground"
+    >
+      {/* Thumbnail / fallback */}
+      <div className="flex items-center justify-center bg-accent text-accent-foreground sm:w-28 py-4 sm:py-0">
+        <Ticket className="h-8 w-8" aria-hidden="true" />
+      </div>
+
+      <div className="flex-1 min-w-0 p-4 sm:p-5">
+        <div className="flex flex-wrap items-start justify-between gap-2">
+          <h3 className="font-display text-card-title truncate max-w-full">
+            {booking.event?.title || "Unknown Event"}
+          </h3>
+          <Badge variant="outline" className={`gap-1 ${statusMeta.cls}`}>
+            <StatusIcon className="h-3 w-3" aria-hidden="true" />
+            {booking.status.charAt(0).toUpperCase() + booking.status.slice(1)}
+          </Badge>
+        </div>
+
+        <div className="mt-2 space-y-1 text-sm text-muted-foreground">
+          {booking.event?.date && (
+            <p className="flex items-center gap-2">
+              <CalendarDays className="h-4 w-4 shrink-0" aria-hidden="true" />
+              {formatDate(booking.event.date)}
+            </p>
+          )}
+          {booking.event?.location && (
+            <p className="flex items-center gap-2">
+              <MapPin className="h-4 w-4 shrink-0" aria-hidden="true" />
+              <span className="truncate">{booking.event.location}</span>
+            </p>
+          )}
+        </div>
+
+        <div className="mt-3 flex flex-wrap items-end justify-between gap-3 border-t border-dashed border-border pt-3">
           <div>
-            <div className="flex items-center gap-2 mb-1">
-              <Ticket size={16} className="text-primary" />
-              <h3 className="text-lg font-semibold">
-                {booking.event?.title || "Unknown Event"}
-              </h3>
-            </div>
-            {booking.event?.date && (
-              <p className="text-sm text-muted-foreground">
-                {formatDate(booking.event.date)}
-              </p>
-            )}
-            {booking.event?.location && (
-              <p className="text-sm text-muted-foreground">
-                {booking.event.location}
-              </p>
-            )}
+            <p className="text-label text-muted-foreground">Seats</p>
+            <p className="text-data font-mono">{seatLabel}</p>
           </div>
           <div className="text-right">
-            <Badge
-              className={
-                booking.status === "confirmed"
-                  ? "bg-green-100 text-green-800"
-                  : booking.status === "cancelled"
-                  ? "bg-red-100 text-red-800"
-                  : "bg-yellow-100 text-yellow-800"
-              }
-            >
-              {booking.status.charAt(0).toUpperCase() + booking.status.slice(1)}
-            </Badge>
-
-            {/* Price — hide for free events */}
             {booking.is_free ? (
-              <p className="text-sm font-semibold mt-2 text-green-600 dark:text-green-400">🎫 Free</p>
+              <p className="text-data font-mono text-success">Free</p>
             ) : booking.total_price > 0 ? (
-              <p className="font-semibold mt-2">{formatPrice(booking.total_price)}</p>
+              <p className="text-data font-mono">{formatPrice(booking.total_price)}</p>
             ) : null}
-            
-            <p className="text-xs text-muted-foreground mt-1">
-              Booked on {formatDate(booking.created_at)}
-            </p>
+            <p className="text-xs text-muted-foreground">Booked {formatDate(booking.created_at)}</p>
           </div>
         </div>
-        <Separator className="my-3" />
-        <div>
-          <p className="text-sm">
-            <span className="font-medium">Seats:</span>{" "}
-            {formatSeats(booking.seats)}
-          </p>
-        </div>
-        <div className="mt-4 flex gap-2">
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => navigate(`/events/${booking.event_id}`)}
-          >
-            View Event
+
+        <div className="mt-4 flex flex-wrap gap-2">
+          {/* Navigation is a link, not a button. */}
+          <Button asChild variant="secondary" size="sm">
+            <Link to={`/events/${booking.event_id}`} aria-label={`View event: ${booking.event?.title || "event"}`}>
+              View Event
+            </Link>
           </Button>
           <Button
             variant="default"
@@ -130,8 +133,8 @@ const TicketDetails = ({ booking }: TicketProps) => {
             Generate Ticket
           </Button>
         </div>
-      </CardContent>
-    </Card>
+      </div>
+    </article>
   );
 };
 

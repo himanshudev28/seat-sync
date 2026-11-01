@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { EventCard } from "./EventCard";
 import { Button } from "./ui/button";
+import { Skeleton } from "./ui/skeleton";
 import { Link } from "react-router-dom";
 import { Event } from "@/types";
 import { ArrowRight, ChevronLeft, ChevronRight } from "lucide-react";
@@ -108,7 +109,7 @@ type HeaderProps = {
 const SectionHeader = ({ controls }: HeaderProps) => (
   <div className="flex flex-col md:flex-row justify-between items-start md:items-end mb-10 gap-5 animate-fadeIn">
     <div>
-      <h2 className="font-display text-2xl md:text-3xl font-bold tracking-tight text-foreground text-balance">
+      <h2 className="font-display text-section tracking-tight text-foreground text-balance">
         On sale now
       </h2>
       <p className="text-muted-foreground mt-2 text-sm md:text-base">
@@ -128,7 +129,7 @@ const SectionHeader = ({ controls }: HeaderProps) => (
 );
 
 export function FeaturedEvents() {
-  const { data: events = [], isLoading } = useQuery({
+  const { data: events = [], isLoading, isError, refetch } = useQuery({
     queryKey: ["events", "featured"],
     queryFn: fetchFeatured,
     staleTime: 60_000,
@@ -143,23 +144,39 @@ export function FeaturedEvents() {
             {Array.from({ length: 4 }).map((_, i) => (
               <Slide key={i}>
                 <div
-                  className="flex flex-col rounded-2xl overflow-hidden border border-border bg-card"
-                  style={{ minHeight: "380px" }}
+                  className="flex flex-col overflow-hidden rounded-2xl border border-border bg-card"
+                  aria-hidden="true"
                 >
-                  <div className="shimmer flex-shrink-0" style={{ paddingTop: "56.25%", position: "relative" }}>
-                    <div className="absolute inset-0" />
-                  </div>
-                  <div className="flex flex-col flex-1 p-4 gap-3">
-                    <div className="shimmer h-4 w-3/4 rounded-lg" />
-                    <div className="shimmer h-3 w-1/2 rounded-lg" />
-                    <div className="shimmer h-3 w-2/3 rounded-lg" />
-                    <div className="pt-2 border-t border-border/60 mt-auto">
-                      <div className="shimmer h-9 w-full rounded-xl" />
-                    </div>
+                  <Skeleton className="aspect-[16/10] w-full rounded-none bg-surface-elevated" />
+                  <div className="flex flex-col gap-3 p-4">
+                    <Skeleton className="h-3 w-16 bg-surface-elevated" />
+                    <Skeleton className="h-5 w-3/4 bg-surface-elevated" />
+                    <Skeleton className="h-4 w-1/2 bg-surface-elevated" />
+                    <Skeleton className="h-4 w-2/3 bg-surface-elevated" />
+                    <Skeleton className="mt-1 h-11 w-full rounded-xl bg-surface-elevated" />
                   </div>
                 </div>
               </Slide>
             ))}
+          </div>
+        </div>
+      </section>
+    );
+  }
+
+  if (isError) {
+    return (
+      <section className="relative overflow-hidden bg-background py-16 md:py-24">
+        <div className="container relative z-10 mx-auto max-w-7xl px-4">
+          <SectionHeader />
+          <div
+            role="alert"
+            className="flex flex-col items-center gap-4 rounded-2xl border border-border bg-card p-10 text-center"
+          >
+            <p className="text-muted-foreground">We couldn't load events right now.</p>
+            <Button className="h-11 rounded-full px-6" onClick={() => refetch()}>
+              Retry
+            </Button>
           </div>
         </div>
       </section>

@@ -3,21 +3,12 @@ import { Link } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { ArrowRight, Calendar, MapPin } from "lucide-react";
 import { formatPrice } from "@/lib/utils";
+import { imageUrl, imageSrcSet, SIZES, WIDTHS } from "@/lib/img";
 
 const TRUST_ITEMS = ["Live seat maps", "Instant confirmation", "Secure checkout"];
 
 /** Used when no event has an image of its own, or that image won't load. */
 const FALLBACK_IMAGE = "https://images.unsplash.com/photo-1540039155733-5bb30b53aa14";
-
-/**
- * `?w=&q=&auto=format` is imgix syntax — it only means anything to Unsplash.
- * Appending it to an arbitrary poster URL is at best dead weight and at worst
- * a cache miss or a 404 on a stricter CDN, so resize only what can resize.
- */
-const isResizable = (url: string) => url.startsWith("https://images.unsplash.com/");
-
-const sized = (url: string, w: number) =>
-  isResizable(url) ? `${url}${url.includes("?") ? "&" : "?"}w=${w}&q=75&auto=format` : url;
 
 type SpotlightEvent = {
   id: string;
@@ -69,7 +60,7 @@ function SpotlightCard({ event, className }: { event: SpotlightEvent; className:
         </span>
       </div>
       <div className="mt-3 flex items-center justify-between">
-        <span className="text-sm font-extrabold text-foreground">{priceLabel(event)}</span>
+        <span className="font-mono text-sm font-bold text-foreground">{priceLabel(event)}</span>
         <span className="text-xs text-primary font-semibold flex items-center gap-1">
           Book now
           <ArrowRight className="h-3 w-3 transition-transform duration-200 group-hover:translate-x-0.5" />
@@ -98,7 +89,6 @@ export function HeroSection() {
   // back the moment the load fails.
   const eventSrc = spotlight.find((e) => e.image_url)?.image_url;
   const heroSrc = eventSrc && eventSrc !== brokenSrc ? eventSrc : FALLBACK_IMAGE;
-  const src = (w: number) => sized(heroSrc, w);
 
   return (
     <section className="relative min-h-[92vh] flex items-center overflow-hidden bg-background">
@@ -171,13 +161,9 @@ export function HeroSection() {
                 // Keyed on the source so React remounts (and re-runs onError)
                 // when the hero swaps from the stock photo to event artwork.
                 key={heroSrc}
-                src={src(800)}
-                srcSet={
-                  isResizable(heroSrc)
-                    ? `${src(480)} 480w, ${src(800)} 800w, ${src(1200)} 1200w`
-                    : undefined
-                }
-                sizes="(min-width: 1024px) 40vw, 80vw"
+                src={imageUrl(heroSrc, 960)}
+                srcSet={imageSrcSet(heroSrc, [...WIDTHS.hero])}
+                sizes={SIZES.hero}
                 alt=""
                 width={800}
                 height={500}

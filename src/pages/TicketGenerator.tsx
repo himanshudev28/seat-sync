@@ -1,3 +1,4 @@
+import { usePageTitle } from "@/shell";
 import { useState, useEffect, useRef, useCallback } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import { useAuth } from "@/providers/AuthProvider";
@@ -13,11 +14,6 @@ import { formatPrice } from "@/lib/utils";
 
 type FetchState = "idle" | "loading" | "success" | "not_found" | "error";
 
-const authHeader = (): Record<string, string> => {
-  const token = localStorage.getItem("auth_token");
-  return token ? { Authorization: `Bearer ${token}` } : {};
-};
-
 const TicketGenerator = () => {
   const { id: bookingId } = useParams<{ id: string }>();
   const navigate = useNavigate();
@@ -31,6 +27,8 @@ const TicketGenerator = () => {
   const [universityName, setUniversityName] = useState("INVERTIS UNIVERSITY");
   const [studentId, setStudentId] = useState("");
   const [course, setCourse] = useState("");
+  // Which required fields were empty when "Generate Ticket" was pressed.
+  const [missing, setMissing] = useState<{ studentId: boolean; course: boolean }>({ studentId: false, course: false });
 
   const [isGeneratingTicket, setIsGeneratingTicket] = useState(false);
   const [isDownloading, setIsDownloading] = useState(false);
@@ -44,6 +42,7 @@ const TicketGenerator = () => {
   const allSeats = (booking?.booking_seats ?? []).map((bs: any) => bs.seat).filter(Boolean);
   const studentName = `${profile?.first_name ?? ""} ${profile?.last_name ?? ""}`.trim() || "N/A";
   const eventTitle  = booking?.event?.title ?? booking?.event_id?.title ?? "";
+  usePageTitle(eventTitle || undefined, "Ticket");
   const eventDate   = booking?.event?.date  ?? booking?.event_id?.date  ?? "";
   const eventVenue  = booking?.event?.location ?? booking?.event_id?.location ?? "—";
   const isFree      = booking?.event?.is_free ?? false;
@@ -51,12 +50,7 @@ const TicketGenerator = () => {
   const canGenerate = studentId.trim().length > 0 && course.trim().length > 0;
 
   // ── Original effects (unchanged) ───────────────────────────────────────────
-  useEffect(() => {
-    if (!user) {
-      toast({ title: "Sign in required", description: "Please sign in to access the ticket generator.", variant: "destructive" });
-      navigate("/auth");
-    }
-  }, [user, navigate]);
+  // Signed-out visitors never reach this page: <RequireAuth> guards the route.
 
   useEffect(() => {
     if (profile) {
@@ -78,11 +72,11 @@ const TicketGenerator = () => {
     setErrorMsg("");
 
     try {
-      const res = await fetch(`/api/bookings/${bookingId}`, { headers: authHeader() });
+      const res = await fetch(`/api/bookings/${bookingId}`, { credentials: "include" });
 
       if (res.status === 401) {
         toast({ title: "Session expired", description: "Please sign in again.", variant: "destructive" });
-        navigate("/auth");
+        navigate("/auth", { state: { from: `/generate-ticket/${bookingId}` } });
         return;
       }
 
@@ -124,7 +118,8 @@ const TicketGenerator = () => {
         ? "https://seat-sync-five.vercel.app"
         : "http://localhost:8080";
 
-    const validateUrl = `${BASE_URL}/validate/${bookingId}`;
+    // The ticket token is the unguessable key the server checks; old booking-id QR codes still validate.
+    const validateUrl = `${BASE_URL}/validate/${encodeURIComponent(booking?.ticket_token ?? bookingId)}`;
 
     QRCode.toDataURL(validateUrl, { width: 400, margin: 2, color: { dark: "#000000", light: "#ffffff" } })
       .then(setQrDataUrl)
@@ -153,9 +148,14 @@ const TicketGenerator = () => {
   // ── Original generateTicket handler (unchanged) ────────────────────────────
   const generateTicket = () => {
     if (!canGenerate) {
+      // The button stays enabled so pressing it explains what's missing (a disabled button can't say why).
+      const m = { studentId: !studentId.trim(), course: !course.trim() };
+      setMissing(m);
+      document.getElementById(m.studentId ? "studentId" : "course")?.focus();
       toast({ title: "Missing fields", description: "Please fill in Student ID and Course to generate the ticket.", variant: "destructive" });
       return;
     }
+    setMissing({ studentId: false, course: false });
     setIsGeneratingTicket(true);
   };
 
@@ -260,11 +260,11 @@ const TicketGenerator = () => {
   // ── Loading skeleton ───────────────────────────────────────────────────────
   if (fetchState === "loading" || fetchState === "idle") {
     return (
-      <div className="container mx-auto py-10 px-4 max-w-6xl">
+      <div className="container mx-auto py-10 px-4 max-w-6xl" aria-busy="true" aria-label="Loading booking">
         <Skeleton className="h-9 w-56 mb-2" />
         <Skeleton className="h-4 w-72 mb-8" />
         <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
-          <div className="rounded-xl border border-border bg-card p-6 space-y-4">
+          <div className="rounded-2xl border border-border bg-card p-6 space-y-4">
             {Array.from({ length: 6 }).map((_, i) => <Skeleton key={i} className="h-10 w-full" />)}
           </div>
           <Skeleton className="h-52 w-full rounded-2xl" />
@@ -277,7 +277,7 @@ const TicketGenerator = () => {
   if (fetchState === "not_found") {
     return (
       <div className="container mx-auto py-16 px-4 max-w-lg text-center">
-        <h1 className="text-2xl font-bold mb-6">Ticket Generator</h1>
+        <h1 className="font-display text-section mb-6">Ticket Generator</h1>
         <Alert variant="destructive" className="text-left mb-6">
           <AlertCircle className="h-4 w-4" />
           <AlertTitle>Booking not found</AlertTitle>
@@ -294,7 +294,7 @@ const TicketGenerator = () => {
   if (fetchState === "error") {
     return (
       <div className="container mx-auto py-16 px-4 max-w-lg text-center">
-        <h1 className="text-2xl font-bold mb-6">Ticket Generator</h1>
+        <h1 className="font-display text-section mb-6">Ticket Generator</h1>
         <Alert variant="destructive" className="text-left mb-6">
           <AlertCircle className="h-4 w-4" />
           <AlertTitle>Failed to load details</AlertTitle>
@@ -304,7 +304,7 @@ const TicketGenerator = () => {
           <Button onClick={fetchBookingDetails} className="gap-2">
             <RefreshCw className="h-4 w-4" /> Retry
           </Button>
-          <Button variant="outline" onClick={() => navigate("/tickets")}>← My Tickets</Button>
+          <Button variant="secondary" onClick={() => navigate("/tickets")}>← My Tickets</Button>
         </div>
       </div>
     );
@@ -315,15 +315,15 @@ const TicketGenerator = () => {
     <div className="container mx-auto py-10 px-4 max-w-6xl">
       {/* Page header */}
       <div className="mb-8">
-        <h1 className="text-3xl font-semibold text-foreground mb-2">Ticket Generator</h1>
+        <h1 className="font-display text-section text-foreground mb-2">Ticket Generator</h1>
         <p className="text-sm text-muted-foreground">Generate and download your event ticket</p>
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-8 items-start">
 
         {/* ── Form panel ────────────────────────────────────────────────────── */}
-        <div className="rounded-xl border border-border bg-card p-6">
-          <h2 className="text-xl font-semibold text-foreground mb-6">Ticket Details</h2>
+        <div className="rounded-2xl border border-border bg-card text-card-foreground p-6">
+          <h2 className="font-display text-card-title text-foreground mb-6">Ticket Details</h2>
           <div className="space-y-4">
 
             <div>
@@ -334,41 +334,52 @@ const TicketGenerator = () => {
             </div>
 
             <div>
-              <label className="block text-sm font-medium text-muted-foreground mb-1.5">Event Name</label>
-              <Input value={eventTitle} readOnly className="bg-muted/50 cursor-default rounded-lg" />
+              <label htmlFor="eventName" className="block text-sm font-medium text-muted-foreground mb-1.5">Event Name</label>
+              <Input id="eventName" value={eventTitle} readOnly className="bg-surface-secondary cursor-default rounded-lg" />
             </div>
 
             <div>
-              <label className="block text-sm font-medium text-muted-foreground mb-1.5">Student Name</label>
-              <Input value={studentName} readOnly className="bg-muted/50 cursor-default rounded-lg" />
+              <label htmlFor="studentName" className="block text-sm font-medium text-muted-foreground mb-1.5">Student Name</label>
+              <Input id="studentName" value={studentName} readOnly className="bg-surface-secondary cursor-default rounded-lg" />
             </div>
 
             <div>
               <label htmlFor="studentId" className="block text-sm font-medium text-muted-foreground mb-1.5">
-                Student ID <span className="text-destructive text-xs">*</span>
+                Student ID <span className="text-destructive text-xs" aria-hidden="true">*</span><span className="sr-only"> (required)</span>
               </label>
-              <Input id="studentId" value={studentId} onChange={(e) => setStudentId(e.target.value)} placeholder="e.g. BCS2022171" className="rounded-lg" />
+              <Input id="studentId" required aria-invalid={missing.studentId || undefined}
+                aria-describedby={missing.studentId ? "studentId-error" : "generate-hint"}
+                value={studentId} onChange={(e) => { setStudentId(e.target.value); if (e.target.value.trim()) setMissing((m) => ({ ...m, studentId: false })); }}
+                placeholder="e.g. BCS2022171" className="rounded-lg" />
+              {missing.studentId && <p id="studentId-error" className="mt-1 text-xs font-medium text-destructive">Enter your student ID.</p>}
             </div>
 
             <div className="grid grid-cols-2 gap-4">
               <div>
-                <label className="block text-sm font-medium text-muted-foreground mb-1.5">Seats ({allSeats.length})</label>
-                <Input value={formatSeatInfo()} readOnly className="bg-muted/50 cursor-default rounded-lg" title={formatSeatInfo()} />
+                <label htmlFor="seatsInfo" className="block text-sm font-medium text-muted-foreground mb-1.5">Seats ({allSeats.length})</label>
+                <Input id="seatsInfo" value={formatSeatInfo()} readOnly className="bg-surface-secondary cursor-default rounded-lg font-mono" title={formatSeatInfo()} />
               </div>
               <div>
                 <label htmlFor="course" className="block text-sm font-medium text-muted-foreground mb-1.5">
-                  Course <span className="text-destructive text-xs">*</span>
+                  Course <span className="text-destructive text-xs" aria-hidden="true">*</span><span className="sr-only"> (required)</span>
                 </label>
-                <Input id="course" value={course} onChange={(e) => setCourse(e.target.value)} placeholder="e.g. B.Tech CSE" className="rounded-lg" />
+                <Input id="course" required aria-invalid={missing.course || undefined}
+                  aria-describedby={missing.course ? "course-error" : "generate-hint"}
+                  value={course} onChange={(e) => { setCourse(e.target.value); if (e.target.value.trim()) setMissing((m) => ({ ...m, course: false })); }}
+                  placeholder="e.g. B.Tech CSE" className="rounded-lg" />
+                {missing.course && <p id="course-error" className="mt-1 text-xs font-medium text-destructive">Enter your course.</p>}
               </div>
             </div>
 
             <div>
-              <label className="block text-sm font-medium text-muted-foreground mb-1.5">Event Date</label>
-              <Input value={eventDate ? formatDate(eventDate) : ""} readOnly className="bg-muted/50 cursor-default rounded-lg" />
+              <label htmlFor="eventDate" className="block text-sm font-medium text-muted-foreground mb-1.5">Event Date</label>
+              <Input id="eventDate" value={eventDate ? formatDate(eventDate) : ""} readOnly className="bg-surface-secondary cursor-default rounded-lg" />
             </div>
 
-            <Button className="w-full rounded-lg py-3 font-medium gap-2" onClick={generateTicket} disabled={!canGenerate}>
+            {!canGenerate && (
+              <p id="generate-hint" className="text-xs text-muted-foreground">Student ID and Course are required to generate your ticket.</p>
+            )}
+            <Button size="pill" className="w-full h-12 gap-2" onClick={generateTicket}>
               <Sparkles className="h-4 w-4" />
               Generate Ticket
             </Button>
@@ -377,7 +388,7 @@ const TicketGenerator = () => {
 
         {/* ── Preview panel ─────────────────────────────────────────────────── */}
         <div className="md:sticky md:top-24">
-          <p className="text-xs font-medium text-muted-foreground uppercase tracking-widest mb-4">Preview</p>
+          <h2 className="text-label text-muted-foreground mb-4">Preview</h2>
 
           {isGeneratingTicket ? (
             <div className="space-y-4">
@@ -496,11 +507,11 @@ const TicketGenerator = () => {
 
               {/* Download buttons */}
               <div className="flex flex-col sm:flex-row gap-3">
-                <Button onClick={downloadTicket} disabled={anyDownloading} className="flex-1 gap-2 rounded-lg">
-                  {isDownloading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Download className="h-4 w-4" />}
+                <Button onClick={downloadTicket} disabled={anyDownloading} size="pill" className="flex-1 h-12 gap-2">
+                  {isDownloading ? <Loader2 className="h-4 w-4 animate-spin motion-reduce:animate-none" /> : <Download className="h-4 w-4" />}
                   {isDownloading ? "Generating…" : "Download PNG"}
                 </Button>
-                <Button variant="outline" onClick={downloadPdf} disabled={anyDownloading} className="flex-1 gap-2 rounded-lg">
+                <Button variant="secondary" onClick={downloadPdf} disabled={anyDownloading} size="pill" className="flex-1 h-12 gap-2">
                   {isDownloadingPdf ? <Loader2 className="h-4 w-4 animate-spin" /> : <FileDown className="h-4 w-4" />}
                   {isDownloadingPdf ? "Generating…" : "Download PDF"}
                 </Button>
@@ -508,9 +519,9 @@ const TicketGenerator = () => {
 
             </div>
           ) : (
-            <div className="bg-muted h-52 flex items-center justify-center rounded-2xl border border-dashed border-border">
+            <div className="bg-surface-secondary h-52 flex items-center justify-center rounded-2xl border border-dashed border-border">
               <div className="text-center px-6">
-                <QrPlaceholder size={40} className="mx-auto mb-3 text-muted-foreground/40" />
+                <QrPlaceholder size={40} className="mx-auto mb-3 text-muted-foreground" aria-hidden="true" />
                 <p className="text-muted-foreground text-sm">
                   {canGenerate
                     ? 'Click "Generate Ticket" to preview your ticket'

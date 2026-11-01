@@ -1,34 +1,27 @@
+/**
+ * Full-screen loading state: the SeatSync wordmark with its coral dot bouncing (redesign.md §4).
+ * Announced once to assistive tech; the motion stops under reduced motion.
+ */
 export default function LoadingScreen() {
   return (
-    <div className="fixed inset-0 z-[9999] flex flex-col items-center justify-center bg-background">
-      <div className="absolute inset-0 overflow-hidden pointer-events-none">
-        <div className="absolute top-1/3 left-1/2 -translate-x-1/2 -translate-y-1/2 w-96 h-96 bg-primary/10 rounded-full blur-3xl animate-pulse" />
+    <div
+      role="status"
+      aria-live="polite"
+      className="fixed inset-0 z-[9999] flex flex-col items-center justify-center bg-background"
+    >
+      <div aria-hidden="true" className="pointer-events-none absolute inset-0 overflow-hidden">
+        <div className="absolute left-1/2 top-1/3 h-96 w-96 -translate-x-1/2 -translate-y-1/2 rounded-full bg-primary/10 blur-3xl" />
       </div>
 
-      <div className="relative flex flex-col items-center gap-6 animate-fadeIn">
-        {/* Logo */}
-        <div className="relative">
-          <div className="absolute -inset-3 rounded-[22px] border-2 border-dashed border-primary/20 animate-[spin_3s_linear_infinite]" />
-          <div className="h-16 w-16 rounded-2xl bg-gradient-to-br from-primary to-blue-500 flex items-center justify-center shadow-xl shadow-primary/30">
-            <svg viewBox="0 0 40 40" className="h-9 w-9 text-white" fill="none" stroke="currentColor" strokeWidth="2.2">
-              <rect x="4" y="10" width="32" height="22" rx="4" />
-              <path d="M12 10V7a8 8 0 0116 0v3" />
-              <circle cx="20" cy="21" r="3" fill="currentColor" />
-            </svg>
-          </div>
-          <span className="absolute -top-1 -right-1 h-3.5 w-3.5 rounded-full bg-primary animate-pulse" />
+      <div className="relative flex flex-col items-center gap-5">
+        <p aria-hidden="true" className="flex items-end font-display text-4xl font-bold tracking-tight text-foreground">
+          SeatSync
+          <span className="mb-2 ml-1 inline-block h-3 w-3 rounded-full bg-primary motion-safe:animate-bounce" />
+        </p>
+        <div aria-hidden="true" className="h-1 w-40 overflow-hidden rounded-full bg-surface-elevated">
+          <div className="h-full w-1/3 rounded-full bg-primary motion-safe:animate-[slide-bar_1.4s_ease-in-out_infinite]" />
         </div>
-
-        {/* Text */}
-        <div className="text-center">
-          <p className="text-lg font-semibold tracking-tight text-foreground">SeatSync</p>
-          <p className="text-sm text-muted-foreground mt-1 animate-pulse">Loading experience…</p>
-        </div>
-
-        {/* Progress bar */}
-        <div className="w-48 h-1 bg-muted rounded-full overflow-hidden">
-          <div className="h-full w-1/3 bg-gradient-to-r from-transparent via-primary to-transparent rounded-full animate-[slide-bar_1.4s_ease-in-out_infinite]" />
-        </div>
+        <span className="sr-only">Loading SeatSync…</span>
       </div>
     </div>
   );

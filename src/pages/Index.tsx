@@ -30,8 +30,9 @@ function CategoryBar() {
 
   if (categories.length === 0) return null;
 
+  // Sticky only from md up: on phones the header + a sticky bar would take ~135px of the screen.
   return (
-    <section className="border-b border-border/50 bg-background/80 backdrop-blur-md sticky top-16 z-30">
+    <section className="border-b border-border/50 bg-background/80 backdrop-blur-md md:sticky md:top-16 z-30">
       <div className="container max-w-7xl mx-auto px-4">
         <div className="flex items-center gap-2 py-4 overflow-x-auto scrollbar-none">
           <h2 className="text-sm text-muted-foreground whitespace-nowrap mr-3">Browse by</h2>

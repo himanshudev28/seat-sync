@@ -3,6 +3,11 @@ import { Button } from "@/components/ui/button";
 
 interface Props {
   children: ReactNode;
+  /**
+   * Inside the page layout: render a <div> (the layout already has the <main>), no full-screen height,
+   * and "Try again" re-renders the page instead of reloading — unless the crash was a failed chunk load.
+   */
+  inline?: boolean;
 }
 
 interface State {
@@ -25,36 +30,51 @@ export default class ErrorBoundary extends Component<Props, State> {
   }
 
   handleReload = () => {
+    const err = this.state.error;
+    // A stale deploy leaves lazy chunks missing; only a full reload fetches the new ones.
+    const chunkFailed =
+      !!err && /Loading chunk|Failed to fetch dynamically imported module|Importing a module script failed/i.test(err.message);
     this.setState({ hasError: false, error: null });
-    window.location.reload();
+    if (!this.props.inline || chunkFailed) window.location.reload();
   };
 
   render() {
     if (this.state.hasError) {
+      const Root = this.props.inline ? "div" : "main";
       return (
-        <div className="min-h-screen flex flex-col items-center justify-center px-4 bg-background text-center gap-6">
-          <div className="h-20 w-20 rounded-2xl bg-destructive/10 flex items-center justify-center">
-            <svg className="h-10 w-10 text-destructive" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-              <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v2m0 4h.01M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z" />
-            </svg>
+        <Root
+          role="alert"
+          className={`flex flex-col items-center justify-center gap-8 bg-background px-4 text-center ${
+            this.props.inline ? "py-24" : "min-h-screen"
+          }`}
+        >
+          {/* Friendly geometric mark (coral accent), not an alarm icon. */}
+          <div aria-hidden="true" className="relative h-24 w-24">
+            <div className="absolute inset-0 rotate-6 rounded-3xl bg-accent" />
+            <div className="absolute inset-3 -rotate-6 rounded-2xl border-2 border-primary/60" />
+            <div className="absolute left-1/2 top-1/2 h-4 w-4 -translate-x-1/2 -translate-y-1/2 rounded-full bg-primary" />
           </div>
-          <div>
-            <h1 className="text-2xl font-bold mb-2">Something went wrong</h1>
-            <p className="text-muted-foreground max-w-sm">
-              An unexpected error occurred. Our team has been notified. Please reload the page to try again.
+          <div className="max-w-md">
+            <h1 className="font-display text-section font-bold text-foreground">Something went wrong</h1>
+            <p className="mt-3 text-muted-foreground">
+              Don't worry, your tickets are safe. Reload the page to try again, or head back home.
             </p>
-            {this.state.error && (
-              <details className="mt-4 text-left text-xs text-muted-foreground bg-muted rounded-lg p-3 max-w-md">
-                <summary className="cursor-pointer font-medium">Error details</summary>
+            {import.meta.env.DEV && this.state.error && (
+              <details className="mt-4 rounded-xl bg-surface-elevated p-3 text-left text-xs text-muted-foreground">
+                <summary className="cursor-pointer font-medium">Error details (development only)</summary>
                 <pre className="mt-2 whitespace-pre-wrap break-all">{this.state.error.message}</pre>
               </details>
             )}
           </div>
-          <div className="flex gap-3">
-            <Button onClick={this.handleReload}>Reload page</Button>
-            <Button variant="outline" onClick={() => (window.location.href = "/")}>Go home</Button>
+          <div className="flex flex-wrap justify-center gap-3">
+            <Button size="pill" onClick={this.handleReload}>
+              Try again
+            </Button>
+            <Button variant="ghost" onClick={() => (window.location.href = "/")}>
+              Go home
+            </Button>
           </div>
-        </div>
+        </Root>
       );
     }
 

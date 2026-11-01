@@ -29,7 +29,7 @@ interface BookingSeat {
   row: string;
   number: number;
   label: string;
-  seat_type: "standard" | "vip" | "blocked";
+  seat_type: "standard" | "vip" | "wheelchair" | "blocked";
   price: number;
   status: string;
 }
@@ -76,19 +76,21 @@ interface Pagination {
 
 function statusBadge(status: Booking["status"]) {
   const cfg: Record<string, { label: string; className: string }> = {
-    confirmed:   { label: "Confirmed",   className: "bg-green-500/15 text-green-400 border-green-500/30" },
-    pending:     { label: "Pending",     className: "bg-yellow-500/15 text-yellow-400 border-yellow-500/30" },
-    cancelled:   { label: "Cancelled",   className: "bg-red-500/15 text-red-400 border-red-500/30" },
-    refunded:    { label: "Refunded",    className: "bg-purple-500/15 text-purple-400 border-purple-500/30" },
-    "checked-in":{ label: "Checked-in", className: "bg-blue-500/15 text-blue-400 border-blue-500/30" },
+    confirmed:   { label: "Confirmed",   className: "bg-success/10 text-success border-success/30" },
+    pending:     { label: "Pending",     className: "bg-warning/10 text-warning border-warning/30" },
+    cancelled:   { label: "Cancelled",   className: "bg-destructive/10 text-destructive border-destructive/30" },
+    refunded:    { label: "Refunded",    className: "bg-accent text-accent-foreground border-primary/30" },
+    "checked-in":{ label: "Checked-in", className: "bg-surface-elevated text-foreground border-border" },
   };
   const c = cfg[status] ?? { label: status, className: "bg-muted text-muted-foreground" };
-  return <span className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-xs font-medium ${c.className}`}>{c.label}</span>;
+  const Icon = status === "confirmed" || status === "checked-in" ? CheckCircle2 : status === "pending" ? Clock : XCircle;
+  return <span className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-xs font-medium ${c.className}`}><Icon className="h-3 w-3" aria-hidden="true" />{c.label}</span>;
 }
 
 function seatTypeBadge(type: string) {
-  if (type === "vip") return <span className="rounded px-1.5 py-0.5 text-xs bg-yellow-500/20 text-yellow-400 font-semibold">VIP</span>;
-  if (type === "blocked") return <span className="rounded px-1.5 py-0.5 text-xs bg-red-500/20 text-red-400 font-semibold">Blocked</span>;
+  if (type === "vip") return <span className="rounded px-1.5 py-0.5 text-xs bg-warning/10 text-warning font-semibold">VIP</span>;
+  if (type === "wheelchair") return <span className="rounded px-1.5 py-0.5 text-xs bg-seat-standard/15 text-foreground font-semibold">♿ Wheelchair</span>;
+  if (type === "blocked") return <span className="rounded px-1.5 py-0.5 text-xs bg-destructive/10 text-destructive font-semibold">Blocked</span>;
   return <span className="rounded px-1.5 py-0.5 text-xs bg-muted text-muted-foreground">Std</span>;
 }
 
@@ -100,8 +102,7 @@ function fmtTime(date: string) {
 }
 
 function authHeader() {
-  const token = localStorage.getItem("auth_token");
-  return token ? { Authorization: `Bearer ${token}` } : {};
+  return {};
 }
 
 // ── CSV export ─────────────────────────────────────────────────────────────────
@@ -169,10 +170,7 @@ export default function AdminBookings() {
 
   const searchTimeout = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  // ── redirect if not admin ──────────────────────────────────────────────────
-  useEffect(() => {
-    if (!authLoading && (!user || !profile?.is_admin)) navigate("/");
-  }, [user, profile, authLoading, navigate]);
+  // Admin-only: <RequireAdmin> (App.tsx) guards this route, so no page-level redirect here.
 
   // ── fetch ──────────────────────────────────────────────────────────────────
   const fetchBookings = useCallback(async (page = 1) => {
@@ -287,11 +285,11 @@ export default function AdminBookings() {
     <div className="min-h-screen bg-background">
       {/* Header bar */}
       <div className="border-b bg-card/50 backdrop-blur px-4 md:px-6 py-3 md:py-4 flex flex-wrap items-center gap-2 md:gap-4">
-        <Button variant="ghost" size="icon" onClick={() => navigate("/admin")} className="shrink-0">
+        <Button variant="ghost" size="icon" onClick={() => navigate("/admin")} className="shrink-0" aria-label="Back to admin dashboard">
           <ArrowLeft className="h-4 w-4" />
         </Button>
         <div className="flex-1 min-w-0">
-          <h1 className="font-display text-lg md:text-xl font-bold">Booking Management</h1>
+          <h1 className="font-display text-section">Booking Management</h1>
           <p className="text-xs text-muted-foreground truncate">
             {filterEventId ? `Filtered by event — ${pagination.total} booking(s)` : `${pagination.total} total bookings`}
           </p>
@@ -300,7 +298,7 @@ export default function AdminBookings() {
           <Button variant="outline" size="sm" onClick={() => exportCSV(bookings)} disabled={!bookings.length} className="flex-1 sm:flex-none">
             <Download className="h-4 w-4 mr-2" /> <span className="hidden sm:inline">Export CSV</span><span className="sm:hidden">Export</span>
           </Button>
-          <Button variant="outline" size="icon" onClick={() => fetchBookings(pagination.page)}>
+          <Button variant="outline" size="icon" onClick={() => fetchBookings(pagination.page)} aria-label="Refresh bookings">
             <RefreshCw className={`h-4 w-4 ${loading ? "animate-spin" : ""}`} />
           </Button>
         </div>
@@ -321,6 +319,7 @@ export default function AdminBookings() {
               onClick={() => { setFilterEventId(""); setFilterEventTitle(""); }}
               className="text-muted-foreground hover:text-foreground transition-colors shrink-0"
               title="Remove event filter"
+              aria-label="Remove event filter"
             >
               <X className="h-4 w-4" />
             </button>
@@ -332,6 +331,7 @@ export default function AdminBookings() {
           <div className="relative flex-1">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
             <Input
+              aria-label="Search bookings"
               placeholder="Search by user name, email, event or booking ID…"
               value={search}
               onChange={(e) => setSearch(e.target.value)}
@@ -340,6 +340,7 @@ export default function AdminBookings() {
             {search && (
               <button
                 onClick={() => setSearch("")}
+                aria-label="Clear search"
                 className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
               >
                 <X className="h-4 w-4" />
@@ -352,8 +353,10 @@ export default function AdminBookings() {
             size="sm"
             onClick={() => setShowFilters((v) => !v)}
             className="gap-2 shrink-0"
+            aria-label="Filters"
+            aria-expanded={showFilters}
           >
-            <Filter className="h-4 w-4" />
+            <Filter className="h-4 w-4" aria-hidden="true" />
             <span className="hidden sm:inline">Filters</span>
             {activeFilterCount > 0 && (
               <span className="ml-1 rounded-full bg-primary text-primary-foreground w-5 h-5 flex items-center justify-center text-xs">
@@ -373,9 +376,9 @@ export default function AdminBookings() {
         {showFilters && (
           <div className="rounded-xl border bg-card/60 p-4 grid grid-cols-2 sm:grid-cols-4 gap-3">
             <div className="space-y-1">
-              <label className="text-xs font-medium text-muted-foreground">Status</label>
+              <label htmlFor="filter-status" className="text-xs font-medium text-muted-foreground">Status</label>
               <Select value={filterStatus} onValueChange={setFilterStatus}>
-                <SelectTrigger className="h-8 text-sm">
+                <SelectTrigger id="filter-status" className="h-8 text-sm">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
@@ -390,9 +393,9 @@ export default function AdminBookings() {
             </div>
 
             <div className="space-y-1">
-              <label className="text-xs font-medium text-muted-foreground">Check-in</label>
+              <label htmlFor="filter-checkin" className="text-xs font-medium text-muted-foreground">Check-in</label>
               <Select value={filterCheckedIn} onValueChange={setFilterCheckedIn}>
-                <SelectTrigger className="h-8 text-sm">
+                <SelectTrigger id="filter-checkin" className="h-8 text-sm">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
@@ -404,21 +407,21 @@ export default function AdminBookings() {
             </div>
 
             <div className="space-y-1">
-              <label className="text-xs font-medium text-muted-foreground">From date</label>
-              <Input type="date" value={filterDateFrom} onChange={(e) => setFilterDateFrom(e.target.value)} className="h-8 text-sm" />
+              <label htmlFor="filter-from" className="text-xs font-medium text-muted-foreground">From date</label>
+              <Input id="filter-from" type="date" value={filterDateFrom} onChange={(e) => setFilterDateFrom(e.target.value)} className="h-8 text-sm" />
             </div>
 
             <div className="space-y-1">
-              <label className="text-xs font-medium text-muted-foreground">To date</label>
-              <Input type="date" value={filterDateTo} onChange={(e) => setFilterDateTo(e.target.value)} className="h-8 text-sm" />
+              <label htmlFor="filter-to" className="text-xs font-medium text-muted-foreground">To date</label>
+              <Input id="filter-to" type="date" value={filterDateTo} onChange={(e) => setFilterDateTo(e.target.value)} className="h-8 text-sm" />
             </div>
           </div>
         )}
 
         {/* Table */}
-        <div className="rounded-xl border bg-card overflow-hidden">
+        <div className="rounded-2xl border bg-card overflow-hidden">
           {/* Table header - desktop only */}
-          <div className="hidden md:grid grid-cols-[1fr_1.2fr_90px_80px_110px_100px_60px] gap-3 px-4 py-2 border-b bg-muted/30 text-xs font-medium text-muted-foreground uppercase tracking-wide">
+          <div className="hidden md:grid grid-cols-[1fr_1.2fr_90px_80px_110px_100px_60px] gap-3 px-4 py-2 border-b bg-surface-secondary text-label text-muted-foreground">
             <span>Booking / User</span>
             <span>Event</span>
             <span className="text-center">Seats</span>
@@ -480,12 +483,12 @@ export default function AdminBookings() {
                   {/* Mobile header row */}
                   <div className="flex md:hidden items-center justify-between mb-2">
                     <div className="flex items-center gap-2">
-                      <div className="h-8 w-8 rounded-full bg-gradient-to-br from-primary/30 to-blue-500/30 flex items-center justify-center shrink-0 text-xs font-bold text-primary">
+                      <div className="h-8 w-8 rounded-full bg-gradient-to-br from-primary/30 to-accent flex items-center justify-center shrink-0 text-xs font-bold text-primary">
                         {b.user?.name?.charAt(0)?.toUpperCase() ?? "?"}
                       </div>
                       <div>
                         <p className="font-medium text-sm">{b.user?.name ?? "Unknown"}</p>
-                        <p className="text-[10px] text-muted-foreground font-mono">{b.id.slice(-8)}</p>
+                        <p className="text-data text-xs text-muted-foreground">{b.id.slice(-8)}</p>
                       </div>
                     </div>
                     <div className="flex items-center gap-2">
@@ -510,13 +513,13 @@ export default function AdminBookings() {
 
                   {/* Booking + user - desktop */}
                   <div className="hidden md:flex items-center gap-2.5 min-w-0">
-                    <div className="h-9 w-9 rounded-full bg-gradient-to-br from-primary/30 to-blue-500/30 flex items-center justify-center shrink-0 text-sm font-bold text-primary">
+                    <div className="h-9 w-9 rounded-full bg-gradient-to-br from-primary/30 to-accent flex items-center justify-center shrink-0 text-sm font-bold text-primary">
                       {b.user?.name?.charAt(0)?.toUpperCase() ?? "?"}
                     </div>
                     <div className="min-w-0">
                       <p className="font-medium text-sm truncate">{b.user?.name ?? "Unknown"}</p>
                       <p className="text-xs text-muted-foreground truncate">{b.user?.email ?? "–"}</p>
-                      <p className="text-[10px] text-muted-foreground/60 font-mono">{b.id.slice(-8)}</p>
+                      <p className="text-data text-xs text-muted-foreground">{b.id.slice(-8)}</p>
                     </div>
                   </div>
 
@@ -547,7 +550,7 @@ export default function AdminBookings() {
                   <div className="flex md:block items-center justify-between md:text-right">
                     <span className="md:hidden text-xs text-muted-foreground">Amount:</span>
                     <span className="text-sm font-semibold">
-                      {b.event?.is_free ? <span className="text-emerald-400 text-xs">Free</span> : formatPrice(b.total_price)}
+                      {b.event?.is_free ? <span className="text-success text-xs">Free</span> : formatPrice(b.total_price)}
                     </span>
                   </div>
 
@@ -575,14 +578,18 @@ export default function AdminBookings() {
                   <div className="flex md:justify-center items-center justify-between">
                     <span className="md:hidden text-xs text-muted-foreground">Check-in:</span>
                     <button
+                      type="button"
                       onClick={() => toggleCheckin(b)}
                       disabled={actionLoading === b.id}
-                      className="flex items-center gap-1 text-xs disabled:opacity-50"
+                      // The name carries the current state in the same words as the visible text (WCAG 2.5.3); the
+                      // title says what activating it does.
+                      aria-label={`${b.checked_in ? "Checked" : "Not checked"} in: ${b.user?.name ?? b.user?.email ?? "guest"}`}
+                      className="-mx-2 flex min-h-9 items-center gap-1 rounded-lg px-2 text-xs hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50"
                       title={b.checked_in ? "Remove check-in" : "Mark checked-in"}
                     >
                       {b.checked_in
-                        ? <><CheckCircle2 className="h-5 w-5 text-green-400" /> <span className="md:hidden text-green-400">Checked</span></>
-                        : <><XCircle className="h-5 w-5 text-muted-foreground/50" /> <span className="md:hidden text-muted-foreground">Not checked</span></>}
+                        ? <><CheckCircle2 className="h-5 w-5 text-success" aria-hidden="true" /> <span className="md:hidden text-success">Checked</span></>
+                        : <><XCircle className="h-5 w-5 text-muted-foreground" aria-hidden="true" /> <span className="md:hidden text-muted-foreground">Not checked</span></>}
                     </button>
                   </div>
 
@@ -591,16 +598,18 @@ export default function AdminBookings() {
                     <Button
                       variant="ghost"
                       size="icon"
-                      className="h-7 w-7"
+                      className="h-9 w-9 md:h-7 md:w-7"
                       onClick={() => setSelected(b)}
+                      aria-label="View booking details"
                     >
                       <Eye className="h-3.5 w-3.5" />
                     </Button>
                     <Button
                       variant="ghost"
                       size="icon"
-                      className="h-7 w-7 text-red-400 hover:text-red-400 hover:bg-red-500/10"
+                      className="h-9 w-9 md:h-7 md:w-7 text-destructive hover:text-destructive hover:bg-destructive/10"
                       onClick={() => setDeleteTarget(b)}
+                      aria-label="Delete booking"
                       disabled={actionLoading === b.id}
                     >
                       <Trash2 className="h-3.5 w-3.5" />
@@ -621,17 +630,19 @@ export default function AdminBookings() {
             </span>
             <div className="flex items-center gap-2">
               <Button
-                variant="outline" size="icon" className="h-8 w-8"
+                variant="outline" size="icon" className="h-10 w-10 md:h-8 md:w-8"
                 disabled={pagination.page <= 1}
                 onClick={() => fetchBookings(pagination.page - 1)}
+                aria-label="Previous page"
               >
                 <ChevronLeft className="h-4 w-4" />
               </Button>
               <span className="font-medium">{pagination.page} / {pagination.totalPages}</span>
               <Button
-                variant="outline" size="icon" className="h-8 w-8"
+                variant="outline" size="icon" className="h-10 w-10 md:h-8 md:w-8"
                 disabled={pagination.page >= pagination.totalPages}
                 onClick={() => fetchBookings(pagination.page + 1)}
+                aria-label="Next page"
               >
                 <ChevronRight className="h-4 w-4" />
               </Button>
@@ -657,7 +668,7 @@ export default function AdminBookings() {
               <div className="flex flex-wrap items-center gap-3">
                 {statusBadge(selected.status)}
                 {selected.checked_in && (
-                  <span className="inline-flex items-center gap-1 rounded-full border border-green-500/30 bg-green-500/15 px-2 py-0.5 text-xs text-green-400">
+                  <span className="inline-flex items-center gap-1 rounded-full border border-success/30 bg-success/10 px-2 py-0.5 text-xs text-success">
                     <CheckCircle2 className="h-3 w-3" /> Checked-in {selected.checked_in_at ? fmtTime(selected.checked_in_at) : ""}
                   </span>
                 )}
@@ -685,7 +696,7 @@ export default function AdminBookings() {
                       <div className="flex items-center gap-2 pt-1">
                         <Badge variant="outline" className="text-[10px]">{selected.event.category}</Badge>
                         {selected.event.is_free
-                          ? <Badge variant="outline" className="text-[10px] text-emerald-400 border-emerald-500/30">Free</Badge>
+                          ? <Badge variant="outline" className="text-[10px] text-success border-success/30">Free</Badge>
                           : <span className="text-xs font-semibold">{formatPrice(selected.event.price)}</span>}
                       </div>
                     </div>
@@ -809,7 +820,7 @@ export default function AdminBookings() {
           <AlertDialogFooter>
             <AlertDialogCancel>Cancel</AlertDialogCancel>
             <AlertDialogAction
-              className="bg-red-600 hover:bg-red-700"
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
               onClick={() => deleteTarget && deleteBooking(deleteTarget.id)}
             >
               Delete

@@ -11,21 +11,21 @@ const TESTIMONIALS = [
     author: "Michael Chen",
     role: "Event Organizer",
     initial: "M",
-    color: "bg-blue-500/20 text-blue-500 border-blue-500/20",
+    color: "bg-foreground/10 text-foreground border-border",
   },
   {
     quote: "I love how easy it is to find and book events. The seat selection interface is intuitive and the whole process is seamless.",
     author: "Priya Patel",
     role: "Theater Enthusiast",
     initial: "P",
-    color: "bg-emerald-500/20 text-emerald-500 border-emerald-500/20",
+    color: "bg-success/15 text-success border-success/20",
   },
 ];
 
 const Stars = ({ count = 5 }: { count?: number }) => (
   <div className="flex gap-0.5">
     {Array(count).fill(0).map((_, i) => (
-      <svg key={i} className="h-4 w-4 text-amber-400" fill="currentColor" viewBox="0 0 20 20">
+      <svg key={i} className="h-4 w-4 text-warning" fill="currentColor" viewBox="0 0 20 20">
         <path d="M9.049 2.927c.3-.921 1.603-.921 1.902 0l1.07 3.292a1 1 0 00.95.69h3.462c.969 0 1.371 1.24.588 1.81l-2.8 2.034a1 1 0 00-.364 1.118l1.07 3.292c.3.921-.755 1.688-1.54 1.118l-2.8-2.034a1 1 0 00-1.175 0l-2.8 2.034c-.784.57-1.838-.197-1.539-1.118l1.07-3.292a1 1 0 00-.364-1.118L2.98 8.72c-.783-.57-.38-1.81.588-1.81h3.461a1 1 0 00.951-.69l1.07-3.292z" />
       </svg>
     ))}
@@ -73,7 +73,8 @@ export function TestimonialsSection() {
             </div>
 
             <footer className="flex items-center gap-4 flex-shrink-0">
-              <div className={`h-12 w-12 rounded-2xl border-2 flex items-center justify-center text-base font-bold flex-shrink-0 ${featured.color}`}>
+              {/* Featured card is inverted (bg-foreground): a solid coral avatar keeps the initial ≥ 4.5:1 in both themes. */}
+              <div className="h-12 w-12 rounded-2xl border-2 border-primary bg-primary text-primary-foreground flex items-center justify-center text-base font-bold flex-shrink-0">
                 {featured.initial}
               </div>
               <div>

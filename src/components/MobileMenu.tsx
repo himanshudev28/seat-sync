@@ -1,5 +1,6 @@
+import { useEffect, useRef } from "react";
 import { Link } from "react-router-dom";
-import { motion, AnimatePresence } from "framer-motion";
+import { motion, AnimatePresence, MotionConfig, useReducedMotion } from "framer-motion";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import {
   Tickets,
@@ -49,16 +50,43 @@ export default function MobileMenu({
     ...(isAdmin ? [{ to: "/admin/bookings", label: "Manage Bookings", icon: BookOpen }] : []),
   ];
 
+  const reduce = useReducedMotion();
+  const panel = useRef<HTMLDivElement>(null);
+  // Escape closes; on open, focus moves into the menu so keyboard users start at the first link.
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", onKey);
+    const el = panel.current;
+    const t = window.setTimeout(() => panel.current?.querySelector<HTMLElement>("a, button")?.focus(), 50);
+    return () => {
+      window.removeEventListener("keydown", onKey);
+      window.clearTimeout(t);
+      // Closing returns focus to the menu button (unless a link already moved focus to a new page).
+      if (!document.activeElement || document.activeElement === document.body || el?.contains(document.activeElement)) {
+        document.querySelector<HTMLElement>('[aria-controls="mobile-menu"]')?.focus();
+      }
+    };
+  }, [open, onClose]);
+
   return (
+    <MotionConfig reducedMotion="user">
     <AnimatePresence>
       {open && (
         <motion.div
           key="mobile-menu"
-          initial={{ opacity: 0, x: "-100%" }}
+          id="mobile-menu"
+          ref={panel}
+          role="dialog"
+          aria-modal="true"
+          aria-label="Menu"
+          initial={reduce ? { opacity: 0 } : { opacity: 0, x: "-100%" }}
           animate={{ opacity: 1, x: 0 }}
-          exit={{ opacity: 0, x: "-100%" }}
-          transition={{ duration: 0.25, ease: [0.22, 1, 0.36, 1] }}
-          className="fixed inset-0 z-40 md:hidden bg-background flex flex-col pt-20 pb-8 px-6"
+          exit={reduce ? { opacity: 0 } : { opacity: 0, x: "-100%" }}
+          transition={{ duration: reduce ? 0.12 : 0.25, ease: [0.22, 1, 0.36, 1] }}
+          className="fixed inset-0 z-40 md:hidden bg-background flex flex-col pt-20 pb-8 px-6 overflow-y-auto"
         >
           {user && (
             <div className="flex items-center gap-3 mb-8 pb-6 border-b border-border">
@@ -77,24 +105,25 @@ export default function MobileMenu({
             </div>
           )}
 
-          <nav className="flex flex-col gap-2 flex-1">
+          <nav aria-label="Main" className="flex flex-col gap-2 flex-1">
             {items.map(({ to, label, icon: Icon }, i) => (
               <motion.div
                 key={to}
-                initial={{ opacity: 0, x: -24 }}
+                initial={reduce ? false : { opacity: 0, x: -24 }}
                 animate={{ opacity: 1, x: 0 }}
                 transition={{ delay: i * 0.06, duration: 0.25, ease: [0.22, 1, 0.36, 1] }}
               >
                 <Link
                   to={to}
                   onClick={onClose}
-                  className={`flex items-center gap-3 rounded-xl px-4 py-3 text-base font-medium transition-colors duration-150 ${
+                  aria-current={isActive(to) ? "page" : undefined}
+                  className={`flex min-h-12 items-center gap-3 rounded-xl px-4 py-3 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring text-base font-medium transition-colors duration-150 ${
                     isActive(to)
                       ? "bg-primary/10 text-primary border border-primary/20"
                       : "text-foreground hover:bg-muted/70"
                   }`}
                 >
-                  <Icon className="h-5 w-5 shrink-0" />
+                  <Icon aria-hidden="true" className="h-5 w-5 shrink-0" />
                   {label}
                 </Link>
               </motion.div>
@@ -107,7 +136,7 @@ export default function MobileMenu({
                 onClick={onSignOut}
                 className="flex w-full items-center gap-3 rounded-xl border border-destructive/30 bg-destructive/10 px-4 py-3 text-base font-medium text-destructive hover:bg-destructive/20 transition-colors"
               >
-                <LogOut className="h-5 w-5" />
+                <LogOut aria-hidden="true" className="h-5 w-5" />
                 Sign Out
               </button>
             ) : (
@@ -122,5 +151,6 @@ export default function MobileMenu({
         </motion.div>
       )}
     </AnimatePresence>
+    </MotionConfig>
   );
 }

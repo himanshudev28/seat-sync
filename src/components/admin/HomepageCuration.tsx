@@ -89,12 +89,12 @@ export function HomepageCuration({ events, onToggle, pendingId }: Props) {
   const spotlightFull = spotlight.length >= SPOTLIGHT_LIMIT;
 
   return (
-    <div className="space-y-10">
+    <div className="space-y-8">
 
       {/* ── What this page controls ─────────────────────────────── */}
       <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
         <div>
-          <h2 className="font-display text-xl font-bold text-foreground">Home page</h2>
+          <h2 className="font-display text-section text-foreground">Home page</h2>
           <p className="text-sm text-muted-foreground mt-1">
             Choose which events appear in the "On sale now" row and over the hero image.
           </p>
@@ -102,13 +102,14 @@ export function HomepageCuration({ events, onToggle, pendingId }: Props) {
         <Button asChild variant="outline" className="rounded-xl self-start sm:self-auto">
           <Link to="/" className="flex items-center gap-2">
             View home page
-            <ExternalLink className="h-3.5 w-3.5" />
+            <ExternalLink className="h-3.5 w-3.5" aria-hidden="true" />
           </Link>
         </Button>
       </div>
 
       {eligible.length === 0 ? (
         <div className="rounded-2xl border border-border bg-card p-10 text-center">
+          <Star className="mx-auto mb-3 h-8 w-8 text-muted-foreground/50" aria-hidden="true" />
           <p className="font-semibold text-foreground">No events can be featured yet</p>
           <p className="text-sm text-muted-foreground mt-1.5 max-w-md mx-auto">
             Only published events with a future date can appear on the home page. Publish an
@@ -121,7 +122,7 @@ export function HomepageCuration({ events, onToggle, pendingId }: Props) {
           <section className="space-y-4">
             <div className="flex items-baseline justify-between gap-4">
               <h3 className="font-semibold text-foreground flex items-center gap-2">
-                <Sparkles className="h-4 w-4 text-primary" />
+                <Sparkles className="h-4 w-4 text-primary" aria-hidden="true" />
                 On sale now
               </h3>
               <p className="text-sm text-muted-foreground">
@@ -145,8 +146,8 @@ export function HomepageCuration({ events, onToggle, pendingId }: Props) {
             )}
 
             {featured.length > FEATURED_LIMIT && (
-              <p className="flex items-center gap-2 text-sm text-amber-600 dark:text-amber-400">
-                <AlertCircle className="h-4 w-4 flex-shrink-0" />
+              <p className="flex items-center gap-2 text-sm text-warning">
+                <AlertCircle className="h-4 w-4 flex-shrink-0" aria-hidden="true" />
                 {featured.length - FEATURED_LIMIT} picked{" "}
                 {featured.length - FEATURED_LIMIT === 1 ? "event won't" : "events won't"} fit — the
                 row shows the {FEATURED_LIMIT} soonest.
@@ -157,7 +158,7 @@ export function HomepageCuration({ events, onToggle, pendingId }: Props) {
           <section className="space-y-4">
             <div className="flex items-baseline justify-between gap-4">
               <h3 className="font-semibold text-foreground flex items-center gap-2">
-                <Star className="h-4 w-4 text-primary" />
+                <Star className="h-4 w-4 text-primary" aria-hidden="true" />
                 Hero spotlight
               </h3>
               <p className="text-sm text-muted-foreground">
@@ -224,7 +225,7 @@ export function HomepageCuration({ events, onToggle, pendingId }: Props) {
                   // Blocked only when the cap is full AND this one isn't in it.
                   const spotlightBlocked = spotlightFull && !e.is_spotlight;
                   return (
-                    <li key={e.id} className="flex flex-col gap-3 p-4 sm:flex-row sm:items-center sm:justify-between">
+                    <li key={e.id} className={`flex flex-col gap-3 p-4 sm:flex-row sm:items-center sm:justify-between transition-colors ${e.is_featured || e.is_spotlight ? "bg-accent/40" : ""}`}>
                       <div className="min-w-0">
                         <p className="font-medium text-foreground truncate">{e.title}</p>
                         <p className="text-xs text-muted-foreground mt-0.5">
@@ -236,6 +237,12 @@ export function HomepageCuration({ events, onToggle, pendingId }: Props) {
                           {e.location ? ` · ${e.location}` : ""}
                           {e.category ? ` · ${e.category}` : ""}
                         </p>
+                        {(e.is_featured || e.is_spotlight) && (
+                          <div className="mt-1.5 flex flex-wrap gap-1.5">
+                            {e.is_featured && <Badge variant="secondary">Featured</Badge>}
+                            {e.is_spotlight && <Badge variant="secondary">Spotlight</Badge>}
+                          </div>
+                        )}
                       </div>
 
                       <div className="flex items-center gap-6 flex-shrink-0">
@@ -243,6 +250,7 @@ export function HomepageCuration({ events, onToggle, pendingId }: Props) {
                           <Switch
                             id={`featured-${e.id}`}
                             checked={!!e.is_featured}
+                            aria-label={`Feature ${e.title}`}
                             disabled={featuredBusy}
                             onCheckedChange={() => onToggle(e.id, "featured")}
                           />
@@ -255,6 +263,7 @@ export function HomepageCuration({ events, onToggle, pendingId }: Props) {
                           <Switch
                             id={`spotlight-${e.id}`}
                             checked={!!e.is_spotlight}
+                            aria-label={`Spotlight ${e.title}`}
                             disabled={spotlightBusy || spotlightBlocked}
                             onCheckedChange={() => onToggle(e.id, "spotlight")}
                           />

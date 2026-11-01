@@ -2,7 +2,7 @@
 import { useState } from "react";
 import { Button } from "./ui/button";
 import { Input } from "./ui/input";
-import { toast } from "@/components/ui/sonner";
+import { toast } from "@/components/ui/use-toast";
 
 export function NewsletterSection() {
   const [email, setEmail] = useState("");
@@ -15,10 +15,10 @@ export function NewsletterSection() {
     // Simulate API call
     try {
       await new Promise(resolve => setTimeout(resolve, 1000));
-      toast.success("Thank you for subscribing to our newsletter!");
+      toast({ title: "Thank you for subscribing to our newsletter!" });
       setEmail("");
     } catch (error) {
-      toast.error("Something went wrong. Please try again.");
+      toast({ title: "Something went wrong. Please try again.", variant: "destructive" });
     } finally {
       setIsSubmitting(false);
     }
