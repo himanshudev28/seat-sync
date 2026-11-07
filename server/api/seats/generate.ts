@@ -146,33 +146,45 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       return res.status(404).json({ error: 'Event not found' });
     }
 
-    // Regenerating seats invalidates any bookings tied to them. Old code
-    // wiped Seats but left BookingSeat rows pointing at the now-deleted seat
-    // ids, and old Bookings stayed visible in /api/bookings.
-    // Cascade: cancel existing bookings + drop their seat junction rows.
-    const existingBookings = await Booking.find({ event_id: eventId })
-      .select('_id')
-      .lean();
-    if (existingBookings.length > 0) {
-      const bookingIds = existingBookings.map((b) => String((b as { _id: unknown })._id));
-      await BookingSeat.deleteMany({ booking_id: { $in: bookingIds } } as any);
-      await Booking.updateMany(
-        { _id: { $in: bookingIds }, status: { $ne: 'cancelled' } } as any,
-        { $set: { status: 'cancelled' } }
-      );
+    // Regenerating seats invalidates any bookings tied to them: cancel the live
+    // ones and drop their seat links. One transaction so a failed insert can't
+    // leave the event with no seats and every booking cancelled. Refunded and
+    // already-cancelled bookings are history and stay untouched.
+    const session = await mongoose.startSession();
+    try {
+      let count = 0;
+      let cancelledBookings = 0;
+      await session.withTransaction(async () => {
+        const live = await Booking.find({ event_id: eventId, status: { $in: ['confirmed', 'pending'] } })
+          .select('_id').session(session).lean();
+        const bookingIds = live.map((b) => b._id);
+        if (bookingIds.length > 0) {
+          await BookingSeat.deleteMany({ booking_id: { $in: bookingIds } }, { session });
+          const r = await Booking.updateMany(
+            { _id: { $in: bookingIds } },
+            { $set: { status: 'cancelled' } },
+            { session }
+          );
+          cancelledBookings = r.modifiedCount;
+        }
+        await Seat.deleteMany({ event_id: eventId }, { session });
+        const created = await Seat.insertMany(
+          layout.seats.map((s) => ({ ...s, event_id: eventId, status: 'available' })),
+          { session }
+        );
+        count = created.length;
+      });
+      // Echo the layout back so the admin UI can report what was actually
+      // written rather than what it hoped for.
+      return res.status(201).json({
+        count,
+        rows: layout.rows.length,
+        columns: layout.columns,
+        cancelledBookings,
+      });
+    } finally {
+      await session.endSession();
     }
-    await Seat.deleteMany({ event_id: eventId });
-
-    const created = await Seat.insertMany(
-      layout.seats.map((s) => ({ ...s, event_id: eventId, status: 'available' }))
-    );
-    // Echo the layout back so the admin UI can report what was actually
-    // written rather than what it hoped for.
-    return res.status(201).json({
-      count: created.length,
-      rows: layout.rows.length,
-      columns: layout.columns,
-    });
   } catch (err) {
     return handleApiError(res, err, '[api/seats/generate]');
   }

@@ -118,6 +118,8 @@ const AppWithLayout = () => {
           <Route path="/admin/bookings" element={<RequireAdmin><AdminBookings /></RequireAdmin>} />
           <Route path="/admin-setup" element={<AdminSetup />} />
           <Route path="/tickets" element={<RequireAuth><MyTickets /></RequireAuth>} />
+          <Route path="/tickets/:id" element={<RequireAuth><TicketGenerator /></RequireAuth>} />
+          {/* Old links (bookmarks, earlier builds) still open the same ticket page. */}
           <Route path="/generate-ticket/:id" element={<RequireAuth><TicketGenerator /></RequireAuth>} />
           <Route path="*" element={<NotFound />} />
         </Routes>

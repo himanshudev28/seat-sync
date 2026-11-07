@@ -221,13 +221,15 @@ export default function EventDetail() {
 
       toast({
         title: "Booking successful!",
-        description: "Your tickets have been booked successfully",
+        description: "Your ticket is ready.",
       });
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: ["event", id] }),
         queryClient.invalidateQueries({ queryKey: ["user-bookings"] }),
       ]);
-      navigate("/tickets");
+      // Straight to the new ticket (it prints in on arrival); My Tickets if the id is missing.
+      const newId = typeof bookData?._id === "string" ? bookData._id : null;
+      navigate(newId ? `/tickets/${newId}?new=1` : "/tickets");
     } catch (error: any) {
       console.error("Error during booking:", error);
       toast({
@@ -298,6 +300,8 @@ export default function EventDetail() {
             src={event.image_url}
             alt={event.title}
             decoding="async"
+            // Many poster hosts refuse hotlinks (403 when a Referer is sent).
+            referrerPolicy="no-referrer"
             className="h-full w-full object-cover"
             onError={() => setImageBroken(true)}
           />

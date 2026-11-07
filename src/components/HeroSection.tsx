@@ -1,14 +1,11 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
-import { ArrowRight, Calendar, MapPin } from "lucide-react";
+import { Armchair, ArrowRight, ShieldCheck, Zap } from "lucide-react";
 import { formatPrice } from "@/lib/utils";
-import { imageUrl, imageSrcSet, SIZES, WIDTHS } from "@/lib/img";
-
-const TRUST_ITEMS = ["Live seat maps", "Instant confirmation", "Secure checkout"];
-
-/** Used when no event has an image of its own, or that image won't load. */
-const FALLBACK_IMAGE = "https://images.unsplash.com/photo-1540039155733-5bb30b53aa14";
+import { imageUrl } from "@/lib/img";
+import { useAuth } from "@/providers/AuthProvider";
+import { VenueScene } from "./landing/VenueScene";
 
 type SpotlightEvent = {
   id: string;
@@ -36,161 +33,197 @@ const dateFmt = new Intl.DateTimeFormat("en-US", {
   day: "numeric",
 });
 
-const priceLabel = (e: SpotlightEvent) =>
-  e.is_free || !e.price ? "Free" : formatPrice(e.price);
+const priceLabel = (e: SpotlightEvent) => (e.is_free || !e.price ? "Free" : formatPrice(e.price));
 
-/** A real, clickable event card floating over the hero image. */
-function SpotlightCard({ event, className }: { event: SpotlightEvent; className: string }) {
+const TRUST = [
+  { icon: Armchair, label: "Live seat maps" },
+  { icon: Zap, label: "Instant confirmation" },
+  { icon: ShieldCheck, label: "Secure checkout" },
+];
+
+type Vars = React.CSSProperties & Record<`--${string}`, string | number>;
+
+/** A real, clickable event (chosen in Admin → Home page) floating over the venue. */
+function SpotlightCard({ event, className }: { event: SpotlightEvent; className?: string }) {
+  // Admins can paste any image URL; hotlink-protected or http images fail, so
+  // fall back to a plain tile rather than a broken-image icon.
+  const [broken, setBroken] = useState(false);
+  const src = event.image_url && !broken ? event.image_url : null;
+
   return (
     <Link
       to={`/events/${event.id}`}
-      className={`group absolute w-60 rounded-2xl border border-border bg-background/90 backdrop-blur-xl p-4 shadow-xl transition-transform duration-300 hover:-translate-y-1 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background ${className}`}
+      className={`group flex items-center gap-3 rounded-2xl border border-border/80 bg-card/95 p-2.5 pr-4 text-left shadow-[0_24px_60px_-24px_rgb(0_0_0/0.45)] backdrop-blur-md transition-[transform,box-shadow,border-color] duration-300 hover:-translate-y-1 hover:border-primary/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background ${className ?? ""}`}
     >
-      <p className="text-sm font-bold text-foreground leading-tight line-clamp-2 mb-2">
-        {event.title}
-      </p>
-      <div className="flex flex-col gap-1 text-xs text-muted-foreground">
-        <span className="flex items-center gap-1.5">
-          <Calendar className="h-3 w-3 text-primary/70 flex-shrink-0" />
-          {dateFmt.format(new Date(event.date))}
-        </span>
-        <span className="flex items-center gap-1.5">
-          <MapPin className="h-3 w-3 text-primary/70 flex-shrink-0" />
+      <div className="relative h-16 w-16 shrink-0 overflow-hidden rounded-xl bg-accent">
+        {src ? (
+          <img
+            src={imageUrl(src, 160)}
+            alt=""
+            referrerPolicy="no-referrer"
+            width={64}
+            height={64}
+            loading="eager"
+            decoding="async"
+            onError={() => setBroken(true)}
+            className="h-full w-full object-cover transition-transform duration-500 group-hover:scale-110"
+          />
+        ) : (
+          <span className="flex h-full w-full items-center justify-center font-display text-2xl font-extrabold text-primary">
+            {event.title.charAt(0)}
+          </span>
+        )}
+      </div>
+      <div className="min-w-0 flex-1">
+        <p className="text-xs font-semibold text-primary">{dateFmt.format(new Date(event.date))}</p>
+        <p className="truncate font-display text-xl font-bold uppercase leading-tight text-foreground">
+          {event.title}
+        </p>
+        <p className="flex items-center gap-1.5 truncate text-xs text-muted-foreground">
           <span className="truncate">{event.location}</span>
-        </span>
+          <span aria-hidden="true">·</span>
+          <span className="font-mono font-bold text-foreground">{priceLabel(event)}</span>
+        </p>
       </div>
-      <div className="mt-3 flex items-center justify-between">
-        <span className="font-mono text-sm font-bold text-foreground">{priceLabel(event)}</span>
-        <span className="text-xs text-primary font-semibold flex items-center gap-1">
-          Book now
-          <ArrowRight className="h-3 w-3 transition-transform duration-200 group-hover:translate-x-0.5" />
-        </span>
-      </div>
+      <ArrowRight
+        aria-hidden="true"
+        className="h-4 w-4 shrink-0 text-primary transition-transform duration-200 group-hover:translate-x-0.5"
+      />
     </Link>
   );
 }
 
 export function HeroSection() {
+  const { user } = useAuth();
   const { data: spotlight = [] } = useQuery({
     queryKey: ["events", "spotlight"],
     queryFn: fetchSpotlight,
     staleTime: 60_000,
   });
-  const [brokenSrc, setBrokenSrc] = useState<string | null>(null);
-
-  // The hero image is the lead event's own artwork when it has one — real
-  // product content beats a stock photo.
-  //
-  // But an admin can paste any URL, and plenty of image hosts refuse
-  // cross-origin requests (hotlink protection returns 403 once the browser
-  // attaches a Referer) or are plain http, which an https deployment blocks as
-  // mixed content. Either way the swap from the stock photo to the event's
-  // artwork used to leave a broken-image icon sitting in the hero, so fall
-  // back the moment the load fails.
-  const eventSrc = spotlight.find((e) => e.image_url)?.image_url;
-  const heroSrc = eventSrc && eventSrc !== brokenSrc ? eventSrc : FALLBACK_IMAGE;
+  const [lead, second] = spotlight;
+  // main.tsx sets data-booted when the static first-paint hero was on screen, so this copy doesn't
+  // replay its entrance. That only applies to the first load: clear it when the hero leaves.
+  useEffect(() => () => document.documentElement.removeAttribute("data-booted"), []);
 
   return (
-    <section className="relative min-h-[92vh] flex items-center overflow-hidden bg-background">
-      {/* ── Ambient background ────────────────────────────────── */}
-      <div className="absolute inset-0 bg-grid-pattern opacity-40 dark:opacity-60 pointer-events-none" />
-      <div className="absolute top-0 left-1/4 w-[800px] h-[500px] rounded-full bg-primary/8 blur-[140px] pointer-events-none" />
-      <div className="absolute bottom-0 right-0 w-[500px] h-[400px] bg-primary/5 blur-[100px] pointer-events-none" />
+    // Pulled up under the floating header so the stage light reaches the top edge.
+    <section aria-labelledby="hero-title" className="relative isolate -mt-20 overflow-hidden pt-20">
+      {/* ── Lighting rig ─────────────────────────────────────── */}
+      <div aria-hidden="true" className="pointer-events-none absolute inset-0 -z-10">
+        <div className="lp-hero-glow absolute inset-0" />
+        <div className="lp-dots absolute inset-0" />
+        <span className="lp-beam" style={{ left: "48%", "--from": "-16deg", "--to": "2deg", "--d": "-3s" } as Vars} />
+        <span className="lp-beam" style={{ left: "66%", "--from": "12deg", "--to": "-6deg", "--d": "-6s" } as Vars} />
+        <span className="lp-beam" style={{ left: "84%", "--from": "-2deg", "--to": "14deg" } as Vars} />
+        <div className="absolute inset-x-0 bottom-0 h-40 bg-gradient-to-t from-background to-transparent" />
+      </div>
 
-      <div className="container max-w-7xl mx-auto px-4 py-24 md:py-32 relative z-10">
-        <div className="grid grid-cols-1 lg:grid-cols-5 gap-16 items-center">
+      <div className="container mx-auto max-w-7xl px-4">
+        <div className="grid items-center gap-y-4 pb-24 pt-8 lg:min-h-[calc(100svh-5rem)] lg:grid-cols-12 lg:gap-x-4 lg:pb-28 lg:pt-4">
+          {/* ── Copy ─────────────────────────────────────────────── */}
+          <div className="relative z-20 flex flex-col gap-7 lg:col-span-5">
+            {/* Space is held for the pill before the spotlight loads, so its arrival doesn't push
+                the headline and venue down (it was the page's biggest layout shift). */}
+            <div className="flex min-h-[2.25rem] items-center">
+            {lead && (
+              <Link
+                to={`/events/${lead.id}`}
+                className="lp-in group inline-flex w-fit max-w-full items-center gap-2.5 rounded-full border border-border bg-card/80 py-1.5 pl-3 pr-4 text-sm shadow-sm backdrop-blur-md transition-colors hover:border-primary/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              >
+                <span className="relative flex h-2 w-2 shrink-0" aria-hidden="true">
+                  <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-primary opacity-60 motion-reduce:hidden" />
+                  <span className="relative inline-flex h-2 w-2 rounded-full bg-primary" />
+                </span>
+                <span className="shrink-0 text-muted-foreground">Now booking</span>
+                <span className="truncate font-semibold text-foreground">{lead.title}</span>
+                <ArrowRight
+                  aria-hidden="true"
+                  className="h-3.5 w-3.5 shrink-0 text-primary transition-transform duration-200 group-hover:translate-x-0.5"
+                />
+              </Link>
+            )}
+            </div>
 
-          {/* ── Left: Copy ───────────────────────────────────────── */}
-          <div className="flex flex-col gap-7 lg:col-span-3">
-            <h1
-              className="font-display text-4xl sm:text-5xl lg:text-6xl font-bold tracking-tight leading-[1.08] text-balance animate-fadeIn"
-              style={{ animationDelay: "0ms" }}
-            >
-              Book events{" "}
-              <span className="text-primary">you'll love,</span>
-              <br />
-              seats you'll remember.
+            <h1 id="hero-title" className="lp-hero-title font-display uppercase text-foreground">
+              <span className="lp-line">
+                <span style={{ "--i": 0 } as Vars}>
+                  The <span className="text-primary">best seat</span>
+                </span>
+              </span>
+              <span className="lp-line">
+                <span style={{ "--i": 1 } as Vars}>in the house</span>
+              </span>
+              <span className="lp-line">
+                <span style={{ "--i": 2 } as Vars}>is yours.</span>
+              </span>
             </h1>
 
             <p
-              className="text-lg text-muted-foreground max-w-lg leading-relaxed animate-fadeIn"
-              style={{ animationDelay: "60ms" }}
+              className="lp-in max-w-md text-pretty text-lg leading-relaxed text-muted-foreground"
+              style={{ "--d": "380ms" } as Vars}
             >
-              Discover concerts, sports, theatre and more. Pick your exact seat on a live map and
-              your ticket lands in seconds.
+              Concerts, matches, theatre and more. See the live seat map, tap the exact seat you want,
+              and your ticket lands in seconds.
             </p>
 
-            <div
-              className="flex flex-col sm:flex-row gap-3 animate-fadeIn"
-              style={{ animationDelay: "120ms" }}
-            >
+            <div className="lp-in flex flex-col gap-3 sm:flex-row" style={{ "--d": "480ms" } as Vars}>
               <Link
                 to="/events"
-                className="inline-flex items-center justify-center gap-2 bg-primary text-primary-foreground rounded-full px-6 py-3 text-sm font-semibold shadow-md shadow-primary/25 hover:bg-primary/90 hover:shadow-lg hover:shadow-primary/30 active:scale-95 transition-all duration-200"
+                className="group inline-flex h-14 items-center justify-center gap-3 rounded-full bg-primary pl-7 pr-2 text-base font-semibold text-primary-foreground shadow-[0_14px_40px_-12px_hsl(var(--primary)/0.65)] transition-[transform,box-shadow] duration-300 hover:-translate-y-0.5 hover:shadow-[0_20px_50px_-12px_hsl(var(--primary)/0.75)] active:translate-y-0 active:scale-[0.98] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background motion-reduce:transform-none"
               >
-                Browse Events
-                <ArrowRight className="h-4 w-4" />
+                Browse events
+                <span className="flex h-10 w-10 items-center justify-center rounded-full bg-primary-foreground/15 transition-transform duration-300 group-hover:translate-x-0.5 group-hover:-rotate-45 motion-reduce:transform-none">
+                  <ArrowRight aria-hidden="true" className="h-4 w-4" />
+                </span>
               </Link>
               <Link
-                to="/auth"
-                className="inline-flex items-center justify-center gap-2 rounded-full border border-border bg-background/70 backdrop-blur-sm px-6 py-3 text-sm font-semibold text-foreground hover:bg-muted/60 hover:border-primary/30 active:scale-95 transition-all duration-200"
+                to={user ? "/tickets" : "/auth"}
+                className="inline-flex h-14 items-center justify-center rounded-full border border-border bg-card/70 px-7 text-base font-semibold text-foreground backdrop-blur-sm transition-colors duration-200 hover:border-foreground/30 hover:bg-card focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
               >
-                Create free account
+                {user ? "My tickets" : "Create free account"}
               </Link>
             </div>
 
-            <div
-              className="flex flex-wrap items-center gap-x-5 gap-y-2 pt-1 animate-fadeIn"
-              style={{ animationDelay: "180ms" }}
+            <ul
+              className="lp-in flex flex-wrap items-center gap-x-6 gap-y-2 pt-1 text-sm text-muted-foreground"
+              style={{ "--d": "580ms" } as Vars}
             >
-              {TRUST_ITEMS.map((label) => (
-                <span key={label} className="text-sm text-muted-foreground">
+              {TRUST.map(({ icon: Icon, label }) => (
+                <li key={label} className="flex items-center gap-2">
+                  <Icon aria-hidden="true" className="h-4 w-4 text-primary" />
                   {label}
-                </span>
+                </li>
               ))}
-            </div>
+            </ul>
           </div>
 
-          {/* ── Right: Visual ────────────────────────────────────── */}
-          <div
-            className="relative hidden lg:flex flex-col gap-4 items-end animate-fadeInScale lg:col-span-2"
-            style={{ animationDelay: "100ms" }}
-          >
-            <div className="relative w-full rounded-2xl overflow-hidden border border-border shadow-2xl">
-              <img
-                // Keyed on the source so React remounts (and re-runs onError)
-                // when the hero swaps from the stock photo to event artwork.
-                key={heroSrc}
-                src={imageUrl(heroSrc, 960)}
-                srcSet={imageSrcSet(heroSrc, [...WIDTHS.hero])}
-                sizes={SIZES.hero}
-                alt=""
-                width={800}
-                height={500}
-                className="w-full aspect-[16/10] object-cover"
-                loading="eager"
-                decoding="async"
-                onError={() => setBrokenSrc(heroSrc)}
-                // React 18 doesn't map the camelCase prop; the lowercase
-                // attribute is what actually reaches the DOM.
-                {...{ fetchpriority: "high" }}
-              />
-              <div className="absolute inset-0 bg-gradient-to-t from-black/60 via-transparent to-transparent" />
-            </div>
+          {/* ── The venue ────────────────────────────────────────── */}
+          <div className="lp-venue-scroll relative -mx-4 sm:mx-0 lg:col-span-7 lg:-mr-10 xl:-mr-20">
+            <VenueScene />
 
-            {/* Real events, chosen in Admin → Home page. Nothing renders until
-                they load, rather than showing invented placeholders. */}
-            {spotlight[0] && (
-              <SpotlightCard event={spotlight[0]} className="-left-8 top-8 animate-float" />
+            {lead && (
+              <div className="lp-float absolute bottom-[4%] left-[-2%] hidden lg:block" style={{ "--depth": "-18px" } as Vars}>
+                <div className="lp-bob">
+                  <SpotlightCard event={lead} className="w-72" />
+                </div>
+              </div>
             )}
-            {spotlight[1] && (
-              <SpotlightCard
-                event={spotlight[1]}
-                className="-right-6 bottom-12 animate-float [animation-delay:0.8s]"
-              />
+            {second && (
+              <div className="lp-float absolute right-[8%] top-[-2%] hidden lg:block" style={{ "--depth": "14px" } as Vars}>
+                <div className="lp-bob" style={{ "--d": "-3s" } as Vars}>
+                  <SpotlightCard event={second} className="w-64" />
+                </div>
+              </div>
             )}
           </div>
 
+          {/* Phones and tablets: the spotlight sits under the venue instead of over it. */}
+          {lead && (
+            <div className="flex flex-col gap-3 sm:flex-row lg:hidden">
+              <SpotlightCard event={lead} className="sm:flex-1" />
+              {second && <SpotlightCard event={second} className="sm:flex-1" />}
+            </div>
+          )}
         </div>
       </div>
     </section>

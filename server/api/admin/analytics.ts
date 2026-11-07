@@ -48,14 +48,14 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           confirmed:  { $sum: { $cond: [{ $eq: ['$status', 'confirmed'] }, 1, 0] } },
           cancelled:  { $sum: { $cond: [{ $eq: ['$status', 'cancelled'] }, 1, 0] } },
           revenue:    { $sum: { $cond: [{ $eq: ['$status', 'confirmed'] }, '$total_price', 0] } },
-          checked_in: { $sum: { $cond: ['$checked_in', 1, 0] } },
+          checked_in: { $sum: { $cond: [{ $and: [{ $eq: ['$status', 'confirmed'] }, '$checked_in'] }, 1, 0] } },
         }},
       ]),
-      // Booking trend: last 14 days, confirmed only
+      // Booking trend: last 14 days, confirmed + pending (same as the stats trend)
       Booking.aggregate([
-        { $match: { event_id: eventObjId, status: 'confirmed', created_at: { $gte: fourteenDaysAgo } } },
+        { $match: { event_id: eventObjId, status: { $in: ['confirmed', 'pending'] }, created_at: { $gte: fourteenDaysAgo } } },
         { $group: {
-          _id: { $dateToString: { format: '%m/%d', date: '$created_at' } },
+          _id: { $dateToString: { format: '%Y-%m-%d', date: '$created_at' } },
           count: { $sum: 1 },
         }},
         { $sort: { _id: 1 } },
@@ -85,8 +85,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const now = Date.now();
     const trend = Array.from({ length: 14 }, (_, i) => {
       const day = new Date(now - (13 - i) * 86400000);
-      const label = `${day.getMonth() + 1}/${day.getDate()}`;
-      return { date: label, count: trendMap.get(label) ?? 0 };
+      // Same UTC YYYY-MM-DD as the $dateToString key above, or the lookup misses.
+      const key = day.toISOString().slice(0, 10);
+      return { date: `${day.getUTCMonth() + 1}/${day.getUTCDate()}`, count: trendMap.get(key) ?? 0 };
     });
 
     const most_active_users = (topUsersRaw as { _id: unknown; count: number; user?: { first_name?: string; last_name?: string; email?: string; student_id?: string; course?: string } }[]).map((r) => ({
@@ -97,7 +98,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       bookings: r.count,
     }));
 
-    const occupancy_pct = s.total > 0 ? Math.round((s.booked / s.total) * 100) : 0;
+    // Blocked seats can't be sold, so they don't count toward capacity.
+    const sellable = s.total - s.blocked;
+    const occupancy_pct = sellable > 0 ? Math.round((s.booked / sellable) * 100) : 0;
 
     return res.status(200).json({
       total_seats: s.total,

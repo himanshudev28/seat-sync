@@ -24,6 +24,12 @@ export default function Header() {
   const location = useLocation();
   const { user, profile, signOut } = useAuth();
   const [isMenuOpen, setIsMenuOpen] = useState(false);
+  // The menu chunk (framer-motion, ~43 KB gzip) is requested only once the menu is first opened.
+  // It used to be rendered closed on every page, which fetched it on every page load anyway.
+  const [menuMounted, setMenuMounted] = useState(false);
+  useEffect(() => {
+    if (isMenuOpen) setMenuMounted(true);
+  }, [isMenuOpen]);
   const [scrolled, setScrolled] = useState(false);
 
   const isAdmin = profile?.is_admin ?? false;
@@ -64,8 +70,13 @@ export default function Header() {
   // to avoid a state churn (and re-render) on every scroll event.
   useEffect(() => {
     let ticking = false;
-    let lastState = window.scrollY > 8;
-    setScrolled(lastState);
+    let lastState = false;
+    // Read the scroll position on the next frame: reading it during mount forced an early
+    // synchronous layout of the whole page (~70 ms on a mid-range phone).
+    const first = requestAnimationFrame(() => {
+      lastState = window.scrollY > 8;
+      setScrolled(lastState);
+    });
     const handleScroll = () => {
       if (ticking) return;
       ticking = true;
@@ -79,7 +90,10 @@ export default function Header() {
       });
     };
     window.addEventListener("scroll", handleScroll, { passive: true });
-    return () => window.removeEventListener("scroll", handleScroll);
+    return () => {
+      cancelAnimationFrame(first);
+      window.removeEventListener("scroll", handleScroll);
+    };
   }, []);
 
   // Lock body scroll when mobile menu is open
@@ -117,7 +131,7 @@ export default function Header() {
 
             {/* ── Logo ──────────────────────────────────────────── */}
             <Link to="/" className="flex items-center gap-0.5 group">
-              <span className="font-display font-bold text-xl tracking-tight text-foreground transition-colors group-hover:text-primary">SeatSync</span>
+              <span className="font-display font-extrabold text-2xl uppercase tracking-wide text-foreground transition-colors group-hover:text-primary">SeatSync</span>
               <span className="text-primary font-bold text-2xl leading-none">.</span>
             </Link>
 
@@ -184,10 +198,12 @@ export default function Header() {
               <ThemeToggle />
               <button
                 onClick={() => setIsMenuOpen((v) => !v)}
+                // Start fetching the menu chunk on touch, a few ms before the click lands.
+                onPointerDown={() => void import("./MobileMenu")}
                 className="h-11 w-11 rounded-xl border border-border flex items-center justify-center text-foreground hover:bg-muted/60 active:scale-95 motion-reduce:transform-none transition-all duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                 aria-label={isMenuOpen ? "Close menu" : "Open menu"}
                 aria-expanded={isMenuOpen}
-                aria-controls="mobile-menu"
+                aria-controls={menuMounted ? "mobile-menu" : undefined}
               >
                 {isMenuOpen ? (
                   <X aria-hidden="true" className="h-4 w-4" />
@@ -201,6 +217,7 @@ export default function Header() {
       </header>
 
       {/* Mobile overlay — code-split, only fetched when first opened */}
+      {menuMounted && (
       <Suspense fallback={null}>
         <MobileMenu
           open={isMenuOpen}
@@ -213,6 +230,7 @@ export default function Header() {
           onSignInClick={() => { navigate("/auth"); setIsMenuOpen(false); }}
         />
       </Suspense>
+      )}
     </>
   );
 }

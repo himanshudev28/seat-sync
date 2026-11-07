@@ -26,10 +26,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const event = await Event.findById(eventId).lean() as { title: string } | null;
     if (!event) throw notFound('Event not found');
 
-    const bookings = await Booking.find({ event_id: eventId })
+    const fetched = await Booking.find({ event_id: eventId })
       .select('user_id total_price status checked_in checked_in_at booking_note created_at')
       .sort({ created_at: 1, _id: 1 })
-      .limit(5_000)
+      .limit(5_001) // one extra row tells us whether the cap cut anything
       .lean() as Array<{
       _id: unknown;
       user_id: unknown;
@@ -37,6 +37,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       status: string;
       created_at: Date;
     }>;
+
+    const truncated = fetched.length > 5_000;
+    const bookings = truncated ? fetched.slice(0, 5_000) : fetched;
 
     // Batch-load all users in one query
     const userIds = [...new Set(bookings.map((b) => String(b.user_id)))];
@@ -55,14 +58,18 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const bookingIds = bookings.map((b) => b._id) as string[];
     const bookingSeats = await BookingSeat.find({ booking_id: { $in: bookingIds } })
       .populate('seat_id')
-      .lean() as unknown as Array<{ booking_id: unknown; seat_id: { row: string; number: number } | null }>;
+      .lean() as unknown as Array<{ booking_id: unknown; seat_id: { row: string; number: number; seat_type?: string } | null }>;
 
     const seatsByBooking = new Map<string, string[]>();
+    const typesByBooking = new Map<string, Set<string>>();
     for (const bs of bookingSeats) {
       const key = String(bs.booking_id);
       if (!seatsByBooking.has(key)) seatsByBooking.set(key, []);
       if (bs.seat_id) {
         seatsByBooking.get(key)!.push(`${bs.seat_id.row}${bs.seat_id.number}`);
+        if (!typesByBooking.has(key)) typesByBooking.set(key, new Set());
+        const t = bs.seat_id.seat_type || 'standard';
+        typesByBooking.get(key)!.add(t.charAt(0).toUpperCase() + t.slice(1));
       }
     }
 
@@ -84,7 +91,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         user?.phone_number ?? '',
         user?.course ?? '',
         (seatsByBooking.get(String(b._id)) ?? []).join(', ') || 'None',
-        'Standard',
+        [...(typesByBooking.get(String(b._id)) ?? [])].join(', ') || 'Standard',
         b.status,
         (b as any).checked_in ? 'Yes' : 'No',
         b.total_price.toFixed(2),
@@ -93,7 +100,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       ];
     });
 
-    const csv = toCSV([header, ...dataRows]);
+    // Don't cut silently: say so when the 5,000-row cap was hit.
+    const csv = toCSV([header, ...dataRows, ...(truncated ? [['NOTE: export truncated at 5000 bookings; use filters or the dashboard for the rest']] : [])]);
 
     res.setHeader('Content-Type', 'text/csv; charset=utf-8');
     res.setHeader('X-Content-Type-Options', 'nosniff');

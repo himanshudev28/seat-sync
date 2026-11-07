@@ -77,8 +77,9 @@ describe("Admin page", () => {
     // Radix tabs activate on focus (automatic activation).
     await waitFor(() => expect(eventsTab).toHaveAttribute("data-state", "active"));
     expect(await screen.findByRole("button", { name: "Edit Past Gala" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Delete Past Gala" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /^(Close|Open) Bookings for Past Gala$/ })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Seats for Past Gala" })).toBeInTheDocument();
+    // The rarer actions (bookings, analytics, delete…) sit in a per-row menu whose trigger names the event too.
+    expect(screen.getByRole("button", { name: "More actions for Past Gala" })).toBeInTheDocument();
   });
 
   it("captions its tables and uses h2 card titles under the h1 (no heading skip)", async () => {

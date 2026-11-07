@@ -22,6 +22,26 @@ function trimPreloads(allow: RegExp): Plugin {
   };
 }
 
+// Preload the self-hosted fonts every page paints first (Latin subsets of the
+// display and body faces), so text renders in its real font without a swap.
+function preloadFonts(patterns: RegExp[]): Plugin {
+  return {
+    name: "preload-critical-fonts",
+    apply: "build",
+    transformIndexHtml: {
+      order: "post",
+      handler(_html, ctx) {
+        const files = Object.keys(ctx.bundle ?? {}).filter((f) => patterns.some((p) => p.test(f)));
+        return files.map((f) => ({
+          tag: "link",
+          attrs: { rel: "preload", href: `/${f}`, as: "font", type: "font/woff2", crossorigin: "" },
+          injectTo: "head" as const,
+        }));
+      },
+    },
+  };
+}
+
 // https://vitejs.dev/config/
 export default defineConfig(({ mode }) => {
   // Expose all .env vars (not just VITE_*) to process.env so API handlers
@@ -42,6 +62,7 @@ export default defineConfig(({ mode }) => {
       // Drop preloads for chunks that only matter to other routes. The big
       // ones (jspdf, qrcode) shouldn't be fetched on the homepage.
       trimPreloads(/^(?!.*\/(pdf-vendor|qr-vendor|charts-vendor)-).+\.js/),
+      preloadFonts([/big-shoulders-latin-wght-normal-[\w-]+\.woff2$/, /inter-latin-wght-normal-[\w-]+\.woff2$/]),
     ].filter(Boolean),
     resolve: {
       alias: {
@@ -70,6 +91,10 @@ export default defineConfig(({ mode }) => {
       // Modern browsers — smaller, faster output (~10-20% smaller than es2015 default).
       target: "es2020",
       cssCodeSplit: true,
+      // Never inline fonts as base64: the small Greek/Cyrillic subsets were being baked into the
+      // render-blocking stylesheet (+15 KB gzip) although almost no page uses them. As files they
+      // are only fetched when a page shows those characters (unicode-range).
+      assetsInlineLimit: (filePath: string) => (/\.(woff2?|ttf|otf)$/.test(filePath) ? false : undefined),
       sourcemap: false,
       chunkSizeWarningLimit: 600,
       // Drop runtime preload of route-only heavy chunks (jspdf, qrcode,

@@ -301,7 +301,7 @@ export default function Profile() {
                   <Label htmlFor="avatarUrl">Avatar URL</Label>
                   <div className="flex gap-3 items-center">
                     {avatarUrl && (
-                      <img src={avatarUrl} alt="Avatar" loading="lazy" className="h-10 w-10 rounded-full object-cover ring-2 ring-border" />
+                      <img src={avatarUrl} alt="Avatar" loading="lazy" referrerPolicy="no-referrer" className="h-10 w-10 rounded-full object-cover ring-2 ring-border" />
                     )}
                     <Input
                       id="avatarUrl"

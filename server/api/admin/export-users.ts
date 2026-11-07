@@ -18,7 +18,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
     const [users, bookingCounts] = await Promise.all([
       User.find({}).select('first_name last_name email phone_number student_id course is_admin created_at').sort({ created_at: 1, _id: 1 }).limit(10_000).lean(),
-      Booking.aggregate([{ $group: { _id: '$user_id', count: { $sum: 1 } } }]),
+      Booking.aggregate([
+        { $match: { status: { $in: ['confirmed', 'pending'] } } },
+        { $group: { _id: '$user_id', count: { $sum: 1 } } },
+      ]),
     ]);
 
     const countMap = new Map(bookingCounts.map((b: any) => [String(b._id), b.count]));

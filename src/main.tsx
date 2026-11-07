@@ -1,7 +1,19 @@
 import { createRoot } from 'react-dom/client'
 import { Component, type ReactNode } from 'react'
 import App from './App.tsx'
+// Self-hosted fonts (were a render-blocking Google Fonts stylesheet on another origin).
+// Only the subsets a page actually uses are downloaded (unicode-range).
+import '@fontsource-variable/big-shoulders/wght.css'
+import '@fontsource-variable/inter/wght.css'
+import '@fontsource/jetbrains-mono/500.css'
+import '@fontsource/jetbrains-mono/700.css'
 import './index.css'
+
+// index.html paints a static copy of the home hero while this bundle loads. If it is already on
+// screen, React's hero appears without replaying its entrance animation (see landing.css).
+if (document.getElementById('boot-shell') && performance.getEntriesByType('paint').length > 0) {
+  document.documentElement.setAttribute('data-booted', '')
+}
 
 // ── ErrorBoundary ──────────────────────────────────────────────────────────
 // Prevents blank-page crashes on Vercel by catching any React runtime errors.

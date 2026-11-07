@@ -1,7 +1,7 @@
 
 import { useState, useEffect, useRef } from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import { useNavigate } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import { useAuth } from "@/providers/AuthProvider";
 import {
   AlertDialog,
@@ -16,11 +16,10 @@ import {
 } from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
-import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { toast } from "@/components/ui/use-toast";
 import TicketDetails from "@/components/TicketDetails";
-import { Tickets, Calendar, Share2, XCircle, AlertCircle, RefreshCw } from "lucide-react";
+import { Tickets, Calendar, Share2, XCircle, AlertCircle, RefreshCw, ExternalLink } from "lucide-react";
 
 type Booking = {
   id: string;
@@ -33,6 +32,8 @@ type Booking = {
     title: string;
     date: string;
     location: string;
+    time?: string;
+    category?: string;
   };
   seats: {
     row: string;
@@ -113,6 +114,8 @@ export default function MyTickets() {
           title: b.event?.title ?? "Unknown Event",
           date: b.event?.date ?? "",
           location: b.event?.location ?? "",
+          time: b.event?.time ?? "",
+          category: b.event?.category ?? "",
         },
         seats: (b.booking_seats ?? []).map((bs: any) => ({
           row: bs.seat?.row ?? "",
@@ -185,17 +188,16 @@ export default function MyTickets() {
   return (
     <div className="container mx-auto py-8 px-4 animate-fade-in-up motion-reduce:animate-none">
       <div className="max-w-4xl mx-auto">
-        <div className="flex flex-wrap items-center justify-between gap-4 mb-8">
-          <div className="flex items-center gap-3">
-            <div className="h-10 w-10 rounded-xl bg-accent text-accent-foreground flex items-center justify-center">
-              <Tickets className="h-5 w-5" aria-hidden="true" />
-            </div>
-            <div>
-              <h1 className="font-display text-section">My Tickets</h1>
-              <p className="text-sm text-muted-foreground">{bookings.length} booking{bookings.length !== 1 ? "s" : ""} total</p>
-            </div>
+        <div className="mb-10 flex flex-wrap items-end justify-between gap-6">
+          <div>
+            <h1 className="font-display text-[clamp(3rem,8vw,5rem)] font-extrabold uppercase leading-[0.84]">
+              My <span className="text-primary">tickets</span>
+            </h1>
+            <p className="mt-3 text-muted-foreground">
+              {bookings.length} booking{bookings.length !== 1 ? "s" : ""} · tap a ticket to open its QR code
+            </p>
           </div>
-          <Button size="pill" onClick={() => navigate("/events")}>Browse Events</Button>
+          <Button size="pill" onClick={() => navigate("/events")}>Browse events</Button>
         </div>
 
         {loading ? (
@@ -244,12 +246,18 @@ export default function MyTickets() {
                   <span className="h-2.5 w-2.5 rounded-full bg-success animate-pulse motion-reduce:animate-none" />
                   <h2 className="text-label text-success">Upcoming · {upcoming.length}</h2>
                 </div>
-                <div className="relative pl-5 border-l-2 border-success/30 space-y-4">
+                <div className="space-y-7">
                   {upcoming.map((booking) => (
-                    <div key={booking.id} className="relative">
-                      <span className="absolute -left-[1.35rem] top-5 h-3 w-3 rounded-full bg-success ring-4 ring-background" />
-                      <TicketDetails booking={booking} />
-                      <div className="flex flex-wrap gap-2 mt-2 pl-1">
+                    <TicketDetails
+                      key={booking.id}
+                      booking={booking}
+                      actions={
+                      <>
+                        <Button asChild size="sm" variant="outline">
+                          <Link to={`/events/${booking.event_id}`} aria-label={`View event: ${booking.event?.title || "event"}`}>
+                            <ExternalLink className="h-3.5 w-3.5 mr-1" aria-hidden="true" /> View event
+                          </Link>
+                        </Button>
                         <Button size="sm" variant="outline" onClick={() => addToCalendar(booking)}>
                           <Calendar className="h-3.5 w-3.5 mr-1" /> Add to Calendar
                         </Button>
@@ -283,8 +291,9 @@ export default function MyTickets() {
                             </AlertDialogFooter>
                           </AlertDialogContent>
                         </AlertDialog>
-                      </div>
-                    </div>
+                      </>
+                      }
+                    />
                   ))}
                 </div>
               </div>
@@ -295,28 +304,25 @@ export default function MyTickets() {
                   <span className="h-2.5 w-2.5 rounded-full bg-muted-foreground" />
                   <h2 className="text-label text-muted-foreground">Past · {past.length}</h2>
                 </div>
-                <div className="relative pl-5 border-l-2 border-border space-y-4 opacity-75">
+                <div className="space-y-7">
                   {past.map((booking) => (
-                    <div key={booking.id} className="relative">
-                      <span className="absolute -left-[1.35rem] top-5 h-3 w-3 rounded-full bg-muted-foreground ring-4 ring-background" />
-                      <div className={!isActive(booking) ? "opacity-60 grayscale" : ""}>
-                        <TicketDetails booking={booking} />
-                        {booking.status === "cancelled" && (
-                          <div className="mt-1 pl-1">
-                            <Badge variant="outline" className="gap-1 bg-destructive/10 text-destructive border-destructive/30"><XCircle className="h-3 w-3" aria-hidden="true" />Cancelled</Badge>
-                          </div>
-                        )}
-                      </div>
-                      {isActive(booking) && (
-                        <div className="flex flex-wrap gap-2 mt-2 pl-1">
-                          <Button size="sm" variant="outline" onClick={() => addToCalendar(booking)}>
-                            <Calendar className="h-3.5 w-3.5 mr-1" /> Add to Calendar
-                          </Button>
-                          <Button size="sm" variant="outline" onClick={() => shareBooking(booking)}>
-                            <Share2 className="h-3.5 w-3.5 mr-1" /> Share
-                          </Button>
-                        </div>
-                      )}
+                    // Cancelled tickets read as void; past ones just step back a little.
+                    <div key={booking.id} className={!isActive(booking) ? "grayscale-[0.85]" : "saturate-[0.7]"}>
+                      <TicketDetails
+                        booking={booking}
+                        actions={
+                          isActive(booking) ? (
+                            <>
+                              <Button size="sm" variant="outline" onClick={() => addToCalendar(booking)}>
+                                <Calendar className="h-3.5 w-3.5 mr-1" /> Add to Calendar
+                              </Button>
+                              <Button size="sm" variant="outline" onClick={() => shareBooking(booking)}>
+                                <Share2 className="h-3.5 w-3.5 mr-1" /> Share
+                              </Button>
+                            </>
+                          ) : undefined
+                        }
+                      />
                     </div>
                   ))}
                 </div>

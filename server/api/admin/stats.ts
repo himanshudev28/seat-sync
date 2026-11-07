@@ -65,7 +65,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         },
       ]),
       Booking.aggregate([
-        { $match: { created_at: { $gte: since30 } } },
+        { $match: { status: { $in: ['confirmed', 'pending'] }, created_at: { $gte: since30 } } },
         {
           $group: {
             _id: { $dateToString: { format: '%Y-%m-%d', date: '$created_at' } },

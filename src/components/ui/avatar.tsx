@@ -21,10 +21,13 @@ Avatar.displayName = AvatarPrimitive.Root.displayName
 const AvatarImage = React.forwardRef<
   React.ElementRef<typeof AvatarPrimitive.Image>,
   React.ComponentPropsWithoutRef<typeof AvatarPrimitive.Image>
->(({ className, ...props }, ref) => (
+>(({ className, referrerPolicy = "no-referrer", ...props }, ref) => (
+  // Profile pictures are pasted URLs (often Google photos or hotlink-protected hosts) that
+  // refuse the request when a Referer is sent, which silently left only the initial showing.
   <AvatarPrimitive.Image
     ref={ref}
-    className={cn("aspect-square h-full w-full", className)}
+    referrerPolicy={referrerPolicy}
+    className={cn("aspect-square h-full w-full object-cover", className)}
     {...props}
   />
 ))

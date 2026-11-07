@@ -1,5 +1,16 @@
 import mongoose, { Document, Schema } from 'mongoose';
 
+/** Per-event ticket layout, set by an admin. Values are optional: missing means "use the default". */
+export interface ITicketSettings {
+  issuer: string | null;
+  show_holder: boolean;
+  show_student_id: boolean;
+  show_course: boolean;
+  student_id_label: string;
+  course_label: string;
+  note: string | null;
+}
+
 export interface IEvent extends Document {
   title: string;
   description: string;
@@ -19,6 +30,8 @@ export interface IEvent extends Document {
   is_bookings_open: boolean;
   max_tickets_per_event: number | null;
   banned_users: string[];
+  /** What the printed ticket shows. Older events have none; readers fall back to defaults. */
+  ticket_settings?: ITicketSettings;
   created_at: Date;
   updated_at: Date;
 }
@@ -41,6 +54,21 @@ const EventSchema = new Schema<IEvent>(
     is_bookings_open: { type: Boolean, default: true },
     max_tickets_per_event: { type: Number, default: null },
     banned_users: { type: [String], default: [] },
+    ticket_settings: {
+      type: new Schema(
+        {
+          issuer: { type: String, default: null },
+          show_holder: { type: Boolean, default: true },
+          show_student_id: { type: Boolean, default: true },
+          show_course: { type: Boolean, default: true },
+          student_id_label: { type: String, default: 'Student ID' },
+          course_label: { type: String, default: 'Course' },
+          note: { type: String, default: null },
+        },
+        { _id: false },
+      ),
+      default: undefined,
+    },
   },
   {
     timestamps: { createdAt: 'created_at', updatedAt: 'updated_at' },

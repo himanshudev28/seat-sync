@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo } from "react";
-import { useNavigate } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import { useAuth } from "@/providers/AuthProvider";
 import {
   Card,
@@ -45,8 +45,36 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { useQueryClient } from "@tanstack/react-query";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
+import { DEFAULT_TICKET_SETTINGS, ticketSettingsOf, type TicketSettings } from "@/components/ticket/ticketData";
+import { TicketFront } from "@/components/ticket/Ticket3D";
 import { toLocalDateTimeParts, fromLocalDateTimeParts } from "@/lib/datetime";
-import { 
+import {
+  Armchair,
+  ChevronLeft,
+  ChevronRight,
+  Copy,
+  ExternalLink,
+  LayoutGrid,
+  RotateCcw,
+  ScanLine,
+  Unlock,
   BarChart3, 
   Calendar, 
   CheckCircle2, 
@@ -85,6 +113,49 @@ import {
 /** Sentinel option in the category dropdown — Radix rejects an empty value. */
 const NEW_CATEGORY = "__new_category__";
 
+/**
+ * The seat layout an admin used last, so "Generate seats" for a new event starts
+ * from it. Falls back to 15 rows × 16 seats, the layout the live events use.
+ */
+const LAST_LAYOUT_KEY = "seatsync:last-seat-layout";
+function lastSeatLayout(): { rows: number; columns: number } {
+  try {
+    const v = JSON.parse(localStorage.getItem(LAST_LAYOUT_KEY) || "null");
+    if (v && v.rows > 0 && v.columns > 0) return { rows: Number(v.rows), columns: Number(v.columns) };
+  } catch {
+    /* storage blocked: use the default */
+  }
+  return { rows: 15, columns: 16 };
+}
+
+/** Price step between seat tiers; the same rule as server/seatPricing.ts (front cheapest). */
+const tierStep = (base: number) => (base > 0 ? Math.max(10, Math.round((base * 0.25) / 10) * 10) : 0);
+
+/** Previous / next for the 50-per-page lists the admin APIs return. */
+function Pager({ page, total, onPage }: { page: number; total: number; onPage: (p: number) => void }) {
+  if (total <= 1) return null;
+  return (
+    <div className="mt-4 flex items-center justify-end gap-2 text-sm">
+      <span className="mr-2 text-muted-foreground">
+        Page {page} of {total}
+      </span>
+      <Button size="sm" variant="outline" onClick={() => onPage(page - 1)} disabled={page <= 1} aria-label="Previous page">
+        <ChevronLeft className="h-4 w-4" />
+      </Button>
+      <Button size="sm" variant="outline" onClick={() => onPage(page + 1)} disabled={page >= total} aria-label="Next page">
+        <ChevronRight className="h-4 w-4" />
+      </Button>
+    </div>
+  );
+}
+
+type ConfirmRequest = {
+  title: string;
+  description: string;
+  confirmLabel: string;
+  run: () => Promise<void> | void;
+};
+
 export default function AdminDashboard() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
@@ -112,6 +183,21 @@ export default function AdminDashboard() {
   const [isFreeEvent, setIsFreeEvent] = useState(false);
   const [maxSeatsPerUser, setMaxSeatsPerUser] = useState(10);
   const [currentEventId, setCurrentEventId] = useState<string | null>(null);
+  // What this event's tickets print (issuer, which attendee fields, labels, a note).
+  const [ticketSettings, setTicketSettings] = useState<TicketSettings>(DEFAULT_TICKET_SETTINGS);
+  const setTicket = <K extends keyof TicketSettings>(k: K, v: TicketSettings[K]) =>
+    setTicketSettings((prev) => ({ ...prev, [k]: v }));
+  // Guards Save against a double click creating the event twice.
+  const [savingEvent, setSavingEvent] = useState(false);
+  const [eventFilter, setEventFilter] = useState<"all" | "upcoming" | "past" | "drafts">("all");
+  // One confirm dialog for every destructive action (replaces window.confirm).
+  const [confirmRequest, setConfirmRequest] = useState<ConfirmRequest | null>(null);
+  const [confirmBusy, setConfirmBusy] = useState(false);
+  // The last request stays on screen while the dialog animates closed (no empty flash).
+  const [shownConfirm, setShownConfirm] = useState<ConfirmRequest | null>(null);
+  useEffect(() => {
+    if (confirmRequest) setShownConfirm(confirmRequest);
+  }, [confirmRequest]);
   
   // AI description generation
   const [isGeneratingDesc, setIsGeneratingDesc] = useState(false);
@@ -132,7 +218,7 @@ export default function AdminDashboard() {
   const [seatPrice, setSeatPrice] = useState("");
   const [customLayout, setCustomLayout] = useState(true);
   const [numberOfRows, setNumberOfRows] = useState(15);
-  const [numberOfColumns, setNumberOfColumns] = useState(15);
+  const [numberOfColumns, setNumberOfColumns] = useState(16);
   const [previewVisible, setPreviewVisible] = useState(true);
   // What the database currently holds for the selected event, so the dialog
   // can say what exists before it says what it will create.
@@ -422,7 +508,8 @@ export default function AdminDashboard() {
     setPublishEvent(event.is_published);
     setIsFreeEvent(event.is_free || false);
     setMaxSeatsPerUser(event.max_seats_per_user || 10);
-    
+    setTicketSettings(ticketSettingsOf(event));
+
     setShowEventDialog(true);
   };
 
@@ -440,6 +527,7 @@ export default function AdminDashboard() {
     setPublishEvent(false);
     setIsFreeEvent(false);
     setMaxSeatsPerUser(10);
+    setTicketSettings(DEFAULT_TICKET_SETTINGS);
     setDescCooldown(0);
   };
 
@@ -465,6 +553,8 @@ export default function AdminDashboard() {
       return;
     }
     
+    if (savingEvent) return;
+    setSavingEvent(true);
     try {
       // Combine date and time
       const dateTime = fromLocalDateTimeParts(eventDate, eventTime);
@@ -486,11 +576,14 @@ export default function AdminDashboard() {
         is_published: publishEvent,
         created_by: user.id, // Ensure this is set to the current user's ID
         is_free: isFreeEvent,
-        max_seats_per_user: maxSeatsPerUser
+        max_seats_per_user: maxSeatsPerUser,
+        ticket_settings: {
+          ...ticketSettings,
+          issuer: ticketSettings.issuer?.trim() || null,
+          note: ticketSettings.note?.trim() || null,
+        },
       };
-      
-      console.log("Creating event with data:", eventData);
-      
+
       const headers: Record<string, string> = { "Content-Type": "application/json" };
 
       let response: Response;
@@ -536,14 +629,14 @@ export default function AdminDashboard() {
         description: error.message || "Failed to save event",
         variant: "destructive",
       });
+    } finally {
+      setSavingEvent(false);
     }
   };
 
+  // Confirmation happens in the shared dialog (see askDelete) before this runs.
   const deleteEvent = async (eventId: string) => {
-    if (!confirm("Are you sure you want to delete this event? This will also delete all bookings and seats for this event.")) {
-      return;
-    }
-    
+    setActionLoading(eventId);
     try {
       const response = await fetch(`/api/events/${eventId}`, {
         method: "DELETE",
@@ -570,6 +663,8 @@ export default function AdminDashboard() {
         description: error.message || "Failed to delete event",
         variant: "destructive",
       });
+    } finally {
+      setActionLoading(null);
     }
   };
 
@@ -583,8 +678,10 @@ export default function AdminDashboard() {
     setSelectedEventId(event.id);
     setSelectedEventTitle(event.title);
     setCustomLayout(true); // Default to custom layout
-    setNumberOfRows(event.seat_rows > 0 ? event.seat_rows : 15);
-    setNumberOfColumns(event.seat_columns > 0 ? event.seat_columns : 15);
+    // An event's own layout first; a new event starts from the layout used last.
+    const last = lastSeatLayout();
+    setNumberOfRows(event.seat_rows > 0 ? event.seat_rows : last.rows);
+    setNumberOfColumns(event.seat_columns > 0 ? event.seat_columns : last.columns);
     setExistingSeatCount(event.total_seats ?? 0);
     setExistingSoldCount(event.sold_seats ?? 0);
     setSeatPrice(event.price.toString());
@@ -616,12 +713,23 @@ export default function AdminDashboard() {
       return;
     }
     
-    if (existingSeatCount > 0 && !confirm(
-      `This replaces the current ${existingSeatCount}-seat layout` +
-      (existingSoldCount > 0 ? ` and cancels ${existingSoldCount} booked seat(s)` : "") +
-      ". Continue?"
-    )) return;
+    if (existingSeatCount > 0) {
+      setConfirmRequest({
+        title: `Replace the ${existingSeatCount}-seat layout?`,
+        description:
+          existingSoldCount > 0
+            ? `Every booking for "${selectedEventTitle}" will be cancelled (${existingSoldCount} seat(s) are sold). This can't be undone.`
+            : `The current seats for "${selectedEventTitle}" are replaced with the new layout.`,
+        confirmLabel: "Replace layout",
+        run: runSeatGeneration,
+      });
+      return;
+    }
+    await runSeatGeneration();
+  };
 
+  const runSeatGeneration = async () => {
+    if (!selectedEventId) return;
     setGeneratingSeats(true);
     try {
       const headers: Record<string, string> = { "Content-Type": "application/json" };
@@ -646,8 +754,15 @@ export default function AdminDashboard() {
       toast({
         title: "Success",
         // Report the grid the server actually wrote, not the one requested.
-        description: `${result.count} seats created (${result.rows} rows × ${result.columns} per row)`,
+        description:
+          `${result.count} seats created (${result.rows} rows × ${result.columns} per row)` +
+          (result.cancelledBookings > 0 ? `. ${result.cancelledBookings} booking(s) cancelled.` : ""),
       });
+      try {
+        localStorage.setItem(LAST_LAYOUT_KEY, JSON.stringify({ rows: result.rows, columns: result.columns }));
+      } catch {
+        /* storage blocked: fine */
+      }
       setShowSeatDialog(false);
       // Without this the events table kept showing the seat counts from before
       // the regeneration until a full page reload.
@@ -677,7 +792,7 @@ export default function AdminDashboard() {
       const result = await response.json();
       if (!response.ok) throw new Error(result.error || "Failed to update booking");
       toast({ title: "Updated", description: `Booking marked as ${status}` });
-      fetchBookings();
+      fetchBookings(bookingsPage);
       void fetchStats();
     } catch (error: any) {
       toast({ title: "Error", description: error.message, variant: "destructive" });
@@ -701,7 +816,7 @@ export default function AdminDashboard() {
         title: "Success",
         description: makeAdmin ? "User promoted to admin" : "Admin role removed",
       });
-      fetchUsers();
+      fetchUsers(usersPage);
     } catch (error: any) {
       toast({ title: "Error", description: error.message, variant: "destructive" });
     } finally {
@@ -717,6 +832,9 @@ export default function AdminDashboard() {
         ...eventData,
         title: `${event.title} (Copy)`,
         is_published: false,
+        // A copy starts off the home page: copying these used to sneak a third spotlight past the cap.
+        is_featured: false,
+        is_spotlight: false,
         date: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString(),
         created_by: user?.id,
       };
@@ -738,7 +856,7 @@ export default function AdminDashboard() {
   };
 
   const resetEventSeats = async (eventId: string, eventTitle: string) => {
-    if (!confirm(`Reset ALL seats for "${eventTitle}"? This will cancel all bookings.`)) return;
+    // Confirmed in the shared dialog before this runs.
     setActionLoading(eventId + "-reset");
     try {
       const headers: Record<string, string> = { "Content-Type": "application/json" };
@@ -749,7 +867,7 @@ export default function AdminDashboard() {
       });
       const result = await response.json();
       if (!response.ok) throw new Error(result.error || "Failed to reset seats");
-      toast({ title: "Reset", description: `${result.seatsReset} seats reset to available` });
+      toast({ title: "Reset", description: `${result.seatsReset} seats for "${eventTitle}" are available again` });
       fetchBookings();
       void fetchEvents();
       void fetchStats();
@@ -974,6 +1092,45 @@ export default function AdminDashboard() {
     }
   };
 
+  const toggleBookings = async (event: any) => {
+    setBookingToggleLoading(event.id);
+    try {
+      const res = await fetch("/api/admin/event-control", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ eventId: event.id, action: "toggle_bookings" }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Failed to toggle bookings");
+      setEvents((prev) => prev.map((e) => (e.id === event.id ? { ...e, is_bookings_open: data.is_bookings_open } : e)));
+      toast({
+        title: data.is_bookings_open ? "Bookings opened" : "Bookings closed",
+        description: data.is_bookings_open ? "People can book seats again." : "No new bookings until you reopen.",
+      });
+    } catch (err: any) {
+      toast({ title: "Error", description: err.message, variant: "destructive" });
+      fetchEvents();
+    } finally {
+      setBookingToggleLoading(null);
+    }
+  };
+
+  const askDelete = (event: any) =>
+    setConfirmRequest({
+      title: `Delete "${event.title}"?`,
+      description: "Its seats and every booking for it are deleted too. This can't be undone.",
+      confirmLabel: "Delete event",
+      run: () => deleteEvent(event.id),
+    });
+
+  const askReset = (event: any) =>
+    setConfirmRequest({
+      title: `Free every seat for "${event.title}"?`,
+      description: "All seats become available and all bookings for this event are cancelled. This can't be undone.",
+      confirmLabel: "Reset seats",
+      run: () => resetEventSeats(event.id, event.title),
+    });
+
   const formatDate = (dateString: string) => {
     return new Date(dateString).toLocaleDateString("en-US", {
       year: "numeric",
@@ -1021,10 +1178,14 @@ export default function AdminDashboard() {
         */}
         {customLayout && (() => {
           const sectionSize = Math.ceil(numberOfRows / 3);
+          // Same tiers the server writes (server/seatPricing.ts): front cheapest, balcony dearest.
+          // The old labels said the opposite ("front: base + ₹5").
+          const base = parseFloat(seatPrice) || 0;
+          const step = tierStep(base);
           const sections = [
-            { name: "FRONT", rows: previewRows.slice(0, Math.min(sectionSize, 2)), surcharge: 5 },
-            { name: "BACK", rows: previewRows.slice(sectionSize, sectionSize + 2), surcharge: 2 },
-            { name: "BALCONY", rows: previewRows.slice(sectionSize * 2, sectionSize * 2 + 2), surcharge: 0 },
+            { name: "FRONT", rows: previewRows.slice(0, Math.min(sectionSize, 2)), price: base },
+            { name: "BACK", rows: previewRows.slice(sectionSize, sectionSize + 2), price: base + step },
+            { name: "BALCONY", rows: previewRows.slice(sectionSize * 2, sectionSize * 2 + 2), price: base + 2 * step },
           ].filter((s) => s.rows.length > 0);
 
           return (
@@ -1038,7 +1199,8 @@ export default function AdminDashboard() {
                   <div className="bg-muted w-3/4 mx-auto text-center py-1 text-xs mb-1">
                     {section.name}
                     <span className="text-muted-foreground">
-                      {section.surcharge > 0 ? ` · base + ₹${section.surcharge}` : " · base price"}
+                      {" · "}
+                      {section.price > 0 ? formatPrice(section.price, { whole: true }) : "Free"}
                     </span>
                   </div>
                   <div className="flex flex-col items-center gap-1 mb-4">
@@ -1142,16 +1304,41 @@ export default function AdminDashboard() {
     return Array.from(byLower.values()).sort((a, b) => a.localeCompare(b));
   }, [events, eventCategory, creatingCategory]);
 
+  const isPastEvent = (e: any) => new Date(e.date).getTime() < Date.now();
+
+  const eventCounts = useMemo(
+    () => ({
+      all: events.length,
+      upcoming: events.filter((e) => e.is_published && !isPastEvent(e)).length,
+      past: events.filter((e) => isPastEvent(e)).length,
+      drafts: events.filter((e) => !e.is_published).length,
+    }),
+    [events],
+  );
+
+  // Upcoming first (soonest at the top), then past events (most recent first).
   const filteredEvents = useMemo(() => {
     const q = eventSearch.trim().toLowerCase();
-    if (!q) return events;
-    return events.filter(
-      (e) =>
-        e.title.toLowerCase().includes(q) ||
-        (e.location || "").toLowerCase().includes(q) ||
-        (e.category || "").toLowerCase().includes(q)
-    );
-  }, [events, eventSearch]);
+    const inFilter = (e: any) =>
+      eventFilter === "all" ||
+      (eventFilter === "upcoming" && e.is_published && !isPastEvent(e)) ||
+      (eventFilter === "past" && isPastEvent(e)) ||
+      (eventFilter === "drafts" && !e.is_published);
+    const matches = (e: any) =>
+      !q ||
+      e.title.toLowerCase().includes(q) ||
+      (e.location || "").toLowerCase().includes(q) ||
+      (e.category || "").toLowerCase().includes(q);
+    const t = (e: any) => new Date(e.date).getTime();
+    return events
+      .filter((e) => inFilter(e) && matches(e))
+      .sort((a, b) => {
+        const pa = isPastEvent(a);
+        const pb = isPastEvent(b);
+        if (pa !== pb) return pa ? 1 : -1;
+        return pa ? t(b) - t(a) : t(a) - t(b);
+      });
+  }, [events, eventSearch, eventFilter]);
 
   const filteredBookings = useMemo(() => {
     const q = bookingSearch.trim().toLowerCase();
@@ -1178,27 +1365,64 @@ export default function AdminDashboard() {
 
   // Chart data — derived from `stats` (true totals) so it always reflects the
   // full dataset, not just the current paginated page.
-  const bookingTrendData = useMemo(
-    () => (stats?.bookingTrend ?? []).slice(-30),
-    [stats?.bookingTrend]
-  );
+  // Every one of the last 30 days, zeros included: the API only lists days that had
+  // bookings, which drew a lone dot (or nothing) instead of a trend.
+  const bookingTrendData = useMemo(() => {
+    const counts = new Map((stats?.bookingTrend ?? []).map((d) => [d.date, d.count]));
+    const label = new Intl.DateTimeFormat("en-US", { month: "short", day: "numeric", timeZone: "UTC" });
+    return Array.from({ length: 30 }, (_, i) => {
+      const day = new Date(Date.now() - (29 - i) * 86_400_000);
+      const key = day.toISOString().slice(0, 10);
+      return { date: label.format(day), count: counts.get(key) ?? 0 };
+    });
+  }, [stats?.bookingTrend]);
   const revenueByEventData = useMemo(
     () => (stats?.revenueByEvent ?? []).map((r) => ({ title: r.title ?? "Unknown", amount: r.revenue })),
     [stats?.revenueByEvent]
   );
 
   return (
-    <div className="container mx-auto py-8 px-4">
-      <h1 className="font-display text-section mb-2">Admin Dashboard</h1>
-      <p className="text-muted-foreground mb-6">Manage events, bookings and seats</p>
+    <div className="container mx-auto max-w-7xl px-4 py-8">
+      <div className="mb-8 flex flex-wrap items-end justify-between gap-6">
+        <div>
+          <h1 className="font-display text-[clamp(2.75rem,6vw,4.25rem)] font-extrabold uppercase leading-[0.85]">
+            Admin <span className="text-primary">dashboard</span>
+          </h1>
+          <p className="mt-3 text-muted-foreground">Events, seats, bookings and people in one place.</p>
+        </div>
+        <div className="flex flex-wrap gap-2">
+          <Button asChild variant="outline" className="gap-2">
+            <Link to="/scan">
+              <ScanLine className="h-4 w-4" aria-hidden="true" />
+              Scan tickets
+            </Link>
+          </Button>
+          <Button asChild variant="outline" className="gap-2">
+            <Link to="/admin/bookings">
+              <Ticket className="h-4 w-4" aria-hidden="true" />
+              Manage bookings
+            </Link>
+          </Button>
+          <Button onClick={openCreateEventDialog} className="gap-2">
+            <Plus className="h-4 w-4" aria-hidden="true" />
+            New event
+          </Button>
+        </div>
+      </div>
 
       <Tabs defaultValue="overview" className="w-full">
-        <TabsList className="mb-6 max-w-full justify-start">
+        <TabsList className="mb-6 h-auto max-w-full flex-wrap justify-start">
           <TabsTrigger value="overview">Overview</TabsTrigger>
-          <TabsTrigger value="events">Events</TabsTrigger>
+          <TabsTrigger value="events">
+            Events <span aria-hidden="true" className="ml-1.5 tabular-nums opacity-70">{stats?.events.total ?? events.length}</span>
+          </TabsTrigger>
           <TabsTrigger value="homepage">Home page</TabsTrigger>
-          <TabsTrigger value="bookings">Bookings</TabsTrigger>
-          <TabsTrigger value="users">Users</TabsTrigger>
+          <TabsTrigger value="bookings">
+            Bookings <span aria-hidden="true" className="ml-1.5 tabular-nums opacity-70">{stats?.bookings.total ?? bookings.length}</span>
+          </TabsTrigger>
+          <TabsTrigger value="users">
+            Users <span aria-hidden="true" className="ml-1.5 tabular-nums opacity-70">{stats?.users.total ?? users.length}</span>
+          </TabsTrigger>
         </TabsList>
 
         {/* ── Overview Tab ── */}
@@ -1263,15 +1487,18 @@ export default function AdminDashboard() {
                 <CardTitle className="text-base">Booking Trend (Last 30 Days)</CardTitle>
               </CardHeader>
               <CardContent>
-                <ResponsiveContainer width="100%" height={200}>
-                  <LineChart data={bookingTrendData}>
-                    <CartesianGrid strokeDasharray="3 3" />
-                    <XAxis dataKey="date" tick={{ fontSize: 10 }} />
-                    <YAxis tick={{ fontSize: 10 }} />
-                    <Tooltip />
-                    <Line type="monotone" dataKey="count" stroke="hsl(var(--primary))" strokeWidth={2} />
-                  </LineChart>
-                </ResponsiveContainer>
+                {/* SVG colour attributes can't read CSS variables, so the series use currentColor. */}
+                <div className="text-primary">
+                  <ResponsiveContainer width="100%" height={200}>
+                    <LineChart data={bookingTrendData}>
+                      <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" />
+                      <XAxis dataKey="date" tick={{ fontSize: 10, fill: "currentColor" }} interval={6} className="text-muted-foreground" />
+                      <YAxis tick={{ fontSize: 10 }} allowDecimals={false} width={28} />
+                      <Tooltip />
+                      <Line type="monotone" dataKey="count" name="Bookings" stroke="currentColor" strokeWidth={2.5} dot={false} />
+                    </LineChart>
+                  </ResponsiveContainer>
+                </div>
               </CardContent>
             </Card>
 
@@ -1280,15 +1507,18 @@ export default function AdminDashboard() {
                 <CardTitle className="text-base">Revenue by Event</CardTitle>
               </CardHeader>
               <CardContent>
-                <ResponsiveContainer width="100%" height={200}>
-                  <BarChart data={revenueByEventData}>
-                    <CartesianGrid strokeDasharray="3 3" />
-                    <XAxis dataKey="title" tick={{ fontSize: 10 }} angle={-45} textAnchor="end" height={60} />
-                    <YAxis tick={{ fontSize: 10 }} />
-                    <Tooltip />
-                    <Bar dataKey="amount" fill="hsl(var(--primary))" />
-                  </BarChart>
-                </ResponsiveContainer>
+                <div className="text-primary">
+                  <ResponsiveContainer width="100%" height={200}>
+                    <BarChart data={revenueByEventData}>
+                      <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" vertical={false} />
+                      <XAxis dataKey="title" tick={{ fontSize: 10 }} angle={-30} textAnchor="end" height={60} interval={0} />
+                      <YAxis tick={{ fontSize: 10 }} width={44} />
+                      <Tooltip formatter={(v: number) => formatPrice(v, { whole: true })} />
+                      {/* currentColor: the bars rendered invisible with fill="hsl(var(--primary))". */}
+                      <Bar dataKey="amount" name="Revenue" fill="currentColor" radius={[6, 6, 0, 0]} />
+                    </BarChart>
+                  </ResponsiveContainer>
+                </div>
               </CardContent>
             </Card>
           </div>
@@ -1398,220 +1628,211 @@ export default function AdminDashboard() {
         </TabsContent>
 
         <TabsContent value="events">
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
-            <Card>
-              <CardContent className="p-4">
-                <p className="text-sm text-muted-foreground">Total Events</p>
-                <p className="text-data text-2xl font-bold">{stats?.events.total ?? events.length}</p>
-              </CardContent>
-            </Card>
-            <Card>
-              <CardContent className="p-4">
-                <p className="text-sm text-muted-foreground">Published</p>
-                <p className="text-data text-2xl font-bold">{stats?.events.published ?? events.filter(e => e.is_published).length}</p>
-              </CardContent>
-            </Card>
-            <Card>
-              <CardContent className="p-4">
-                <p className="text-sm text-muted-foreground">Drafts</p>
-                <p className="text-data text-2xl font-bold">{stats?.events.drafts ?? events.filter(e => !e.is_published).length}</p>
-              </CardContent>
-            </Card>
-            <Card>
-              <CardContent className="p-4">
-                <p className="text-sm text-muted-foreground">Total Bookings</p>
-                <p className="text-data text-2xl font-bold">{stats?.bookings.total ?? bookings.length}</p>
-              </CardContent>
-            </Card>
-          </div>
           <Card>
             <CardHeader>
-              <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
-                <div>
-                  <CardTitle>Events Management</CardTitle>
-                  <CardDescription>Create and manage events</CardDescription>
+              <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+                <div role="group" aria-label="Show events" className="flex flex-wrap gap-2">
+                  {(
+                    [
+                      ["all", "All"],
+                      ["upcoming", "Upcoming"],
+                      ["past", "Past"],
+                      ["drafts", "Drafts"],
+                    ] as const
+                  ).map(([key, label]) => (
+                    <button
+                      key={key}
+                      type="button"
+                      onClick={() => setEventFilter(key)}
+                      aria-pressed={eventFilter === key}
+                      className={`inline-flex h-9 items-center gap-2 rounded-full border px-4 text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${
+                        eventFilter === key
+                          ? "border-primary bg-primary text-primary-foreground"
+                          : "border-border bg-card text-foreground hover:bg-muted"
+                      }`}
+                    >
+                      {label}
+                      <span className="tabular-nums opacity-70">{eventCounts[key]}</span>
+                    </button>
+                  ))}
                 </div>
-                <Button onClick={openCreateEventDialog}>Create New Event</Button>
-              </div>
-            </CardHeader>
-            <CardContent>
-              <div className="mb-4">
                 <Input
-                  placeholder="Search events..."
+                  placeholder="Search title, place or category"
+                  aria-label="Search events"
                   value={eventSearch}
                   onChange={(e) => setEventSearch(e.target.value)}
-                  className="max-w-sm"
+                  className="lg:max-w-xs"
                 />
               </div>
+            </CardHeader>
+            <CardContent className="p-0">
               {filteredEvents.length === 0 ? (
-                <div className="text-center py-12">
-                  <p className="text-lg mb-2">No events found</p>
-                  <p className="text-muted-foreground mb-6">
-                    Start by creating your first event
+                <div className="border-t border-border px-6 py-14 text-center">
+                  <p className="font-display text-2xl font-extrabold uppercase">
+                    {events.length === 0 ? "No events yet" : "Nothing matches"}
                   </p>
-                  <Button onClick={openCreateEventDialog}>Create Event</Button>
+                  <p className="mt-1 text-muted-foreground">
+                    {events.length === 0 ? "Create your first event to start selling seats." : "Try another filter or search."}
+                  </p>
+                  {events.length === 0 && (
+                    <Button onClick={openCreateEventDialog} className="mt-6 gap-2">
+                      <Plus className="h-4 w-4" aria-hidden="true" />
+                      New event
+                    </Button>
+                  )}
                 </div>
               ) : (
-                <div className="overflow-auto max-h-[70vh] rounded-xl border">
-                  <Table>
-                    <TableCaption className="sr-only">Events</TableCaption>
-                    <TableHeader className="sticky top-0 z-10 bg-card shadow-[0_1px_0_hsl(var(--border))]">
-                      <TableRow>
-                        <TableHead>Title</TableHead>
-                        <TableHead>Date</TableHead>
-                        <TableHead>Category</TableHead>
-                        <TableHead>Price</TableHead>
-                        <TableHead>Status</TableHead>
-                        <TableHead>Seats</TableHead>
-                        <TableHead>Sold</TableHead>
-                        <TableHead>Actions</TableHead>
-                      </TableRow>
-                    </TableHeader>
-                    <TableBody>
-                      {filteredEvents.map((event) => (
-                        <TableRow key={event.id}>
-                          <TableCell className="font-medium">{event.title}</TableCell>
-                          <TableCell>{formatDate(event.date)}</TableCell>
-                          <TableCell>{event.category}</TableCell>
-                          <TableCell>{event.is_free ? "Free" : formatPrice(event.price)}</TableCell>
-                          <TableCell>{getPublishStatusBadge(event.is_published)}</TableCell>
-                          <TableCell>{event.total_seats || 0}</TableCell>
-                          <TableCell>{event.sold_seats || 0}</TableCell>
-                          <TableCell>
-                            <div className="flex flex-wrap gap-2">
-                              <Button
-                                size="sm"
-                                variant="outline"
-                                onClick={() => openEditEventDialog(event)}
-                                aria-label={`Edit ${event.title}`}
-                                disabled={!!actionLoading}
-                              >
-                                Edit
-                              </Button>
-                              <Button
-                                size="sm"
-                                variant={event.is_bookings_open !== false ? "default" : "destructive"}
-                                onClick={async () => {
-                                  setBookingToggleLoading(event.id);
-                                  try {
-                                    const res = await fetch("/api/admin/event-control", {
-                                      method: "PATCH",
-                                      headers: { "Content-Type": "application/json",  },
-                                      body: JSON.stringify({ eventId: event.id, action: "toggle_bookings" }),
-                                    });
-                                    const data = await res.json();
-                                    if (!res.ok) throw new Error(data.error || "Failed to toggle bookings");
-                                    // Optimistic local update
-                                    setEvents(prev => prev.map(e => e.id === event.id ? { ...e, is_bookings_open: data.is_bookings_open } : e));
-                                    toast({ title: data.is_bookings_open ? "✅ Bookings Opened" : "🔒 Bookings Closed", description: data.is_bookings_open ? "Users can now book seats" : "No new bookings allowed" });
-                                  } catch (err: any) {
-                                    toast({ title: "Error", description: err.message, variant: "destructive" });
-                                    fetchEvents(); // Revert on error
-                                  } finally {
-                                    setBookingToggleLoading(null);
-                                  }
-                                }}
-                                disabled={bookingToggleLoading === event.id}
-                                className="min-w-[130px]"
-                                aria-label={`${event.is_bookings_open !== false ? "Close Bookings" : "Open Bookings"} for ${event.title}`}
-                              >
-                                {bookingToggleLoading === event.id
-                                  ? "Updating..."
-                                  : event.is_bookings_open !== false
-                                    ? "Close Bookings"
-                                    : "Open Bookings"}
-                              </Button>
-                              <Button
-                                size="sm"
-                                variant="outline"
-                                onClick={() => openManageSeatsDialog(event)}
-                                aria-label={`Seats for ${event.title}`}
-                                disabled={!!actionLoading}
-                              >
-                                Seats
-                              </Button>
-                              <Button
-                                size="sm"
-                                variant="outline"
-                                onClick={() => navigate(`/admin/bookings?eventId=${event.id}`)}
-                                aria-label={`Bookings for ${event.title}`}
-                                disabled={!!actionLoading}
-                              >
-                                <Ticket className="h-4 w-4 mr-1" /> Bookings
-                              </Button>
-                              <Button
-                                size="sm"
-                                variant="outline"
-                                onClick={() => exportBookingsCSV(event.id, event.title)}
-                                aria-label={`Export CSV for ${event.title}`}
-                                disabled={exportLoading === event.id || !!actionLoading}
-                              >
-                                {exportLoading === event.id ? (
-                                  <span className="flex items-center">
-                                    <svg className="animate-spin -ml-1 mr-2 h-4 w-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-                                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
-                                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-                                    </svg>
-                                    Exporting...
-                                  </span>
-                                ) : (
-                                  <span className="flex items-center">
-                                    <Download className="h-4 w-4 mr-1" /> Export CSV
-                                  </span>
-                                )}
-                              </Button>
-                              <Button
-                                size="sm"
-                                variant="outline"
-                                onClick={() => fetchEventAnalytics(event.id, event.title)}
-                                aria-label={`Analytics for ${event.title}`}
-                                disabled={!!actionLoading}
-                              >
-                                Analytics
-                              </Button>
-                              <Button
-                                size="sm"
-                                variant="outline"
-                                onClick={() => openSeatControl(event)}
-                                aria-label={`Seat Control for ${event.title}`}
-                                disabled={!!actionLoading}
-                              >
-                                Seat Control
-                              </Button>
-                              <Button
-                                size="sm"
-                                variant="outline"
-                                onClick={() => duplicateEvent(event)}
-                                aria-label={`Duplicate ${event.title}`}
-                                disabled={actionLoading === event.id + "-dup"}
-                              >
-                                {actionLoading === event.id + "-dup" ? "Copying..." : "Duplicate"}
-                              </Button>
-                              <Button
-                                size="sm"
-                                variant="outline"
-                                onClick={() => resetEventSeats(event.id, event.title)}
-                                aria-label={`Reset Seats for ${event.title}`}
-                                disabled={actionLoading === event.id + "-reset"}
-                              >
-                                {actionLoading === event.id + "-reset" ? "Resetting..." : "Reset Seats"}
-                              </Button>
-                              <Button
-                                size="sm"
-                                variant="destructive"
-                                onClick={() => deleteEvent(event.id)}
-                                aria-label={`Delete ${event.title}`}
-                                disabled={actionLoading === event.id}
-                              >
-                                {actionLoading === event.id ? "Deleting..." : "Delete"}
-                              </Button>
+                <ul className="divide-y divide-border border-t border-border">
+                  {filteredEvents.map((event) => {
+                    const when = new Date(event.date);
+                    const past = isPastEvent(event);
+                    const total = event.total_seats || 0;
+                    const sold = event.sold_seats || 0;
+                    const pct = total ? Math.round((sold / total) * 100) : 0;
+                    const open = event.is_bookings_open !== false;
+                    const busy =
+                      (!!actionLoading && actionLoading.startsWith(event.id)) ||
+                      bookingToggleLoading === event.id ||
+                      exportLoading === event.id;
+                    return (
+                      <li key={event.id} className="flex flex-col gap-4 px-6 py-4 md:flex-row md:items-center">
+                        <div className="flex min-w-0 flex-1 items-center gap-4">
+                          <div
+                            className={`flex h-14 w-14 shrink-0 flex-col items-center justify-center rounded-xl ${
+                              past ? "bg-muted text-muted-foreground" : "bg-accent text-accent-foreground"
+                            }`}
+                            aria-hidden="true"
+                          >
+                            <span className="font-display text-2xl font-extrabold leading-none">{when.getDate()}</span>
+                            <span className="text-[10px] font-bold uppercase tracking-wider">
+                              {when.toLocaleString("en-US", { month: "short" })}
+                            </span>
+                          </div>
+                          <div className="min-w-0">
+                            <div className="flex flex-wrap items-center gap-2">
+                              <p className="truncate font-semibold text-foreground">{event.title}</p>
+                              {!event.is_published ? (
+                                <Badge variant="outline" className="border-warning/40 text-warning">Draft</Badge>
+                              ) : past ? (
+                                <Badge variant="outline" className="text-muted-foreground">Past</Badge>
+                              ) : (
+                                <Badge className="bg-success/10 text-success hover:bg-success/10">Live</Badge>
+                              )}
+                              {!open && !past && (
+                                <Badge variant="outline" className="gap-1 border-destructive/30 text-destructive">
+                                  <Lock className="h-3 w-3" aria-hidden="true" />
+                                  Bookings closed
+                                </Badge>
+                              )}
+                              {event.is_spotlight && <Badge variant="outline" className="border-primary/30 text-primary">Spotlight</Badge>}
+                              {event.is_featured && <Badge variant="outline">Featured</Badge>}
                             </div>
-                          </TableCell>
-                        </TableRow>
-                      ))}
-                    </TableBody>
-                  </Table>
-                </div>
+                            <p className="mt-0.5 truncate text-sm text-muted-foreground">
+                              {[event.category, event.location, formatDate(event.date)].filter(Boolean).join(" · ")}
+                            </p>
+                          </div>
+                        </div>
+
+                        <div className="w-full md:w-48">
+                          {total > 0 ? (
+                            <>
+                              <div className="mb-1 flex justify-between text-xs">
+                                <span className="text-muted-foreground">Seats sold</span>
+                                <span className="font-mono font-semibold">
+                                  {sold}/{total}
+                                </span>
+                              </div>
+                              <div className="h-1.5 overflow-hidden rounded-full bg-muted" aria-hidden="true">
+                                <div className="h-full rounded-full bg-primary" style={{ width: `${pct}%` }} />
+                              </div>
+                            </>
+                          ) : (
+                            <button
+                              type="button"
+                              onClick={() => openManageSeatsDialog(event)}
+                              className="text-sm font-medium text-primary underline-offset-4 hover:underline"
+                            >
+                              No seats yet · generate
+                            </button>
+                          )}
+                        </div>
+
+                        <div className="w-20 font-mono text-sm font-semibold md:text-right">
+                          {event.is_free ? "Free" : formatPrice(event.price, { whole: true })}
+                        </div>
+
+                        <div className="flex items-center gap-2">
+                          <Button size="sm" variant="outline" className="gap-1.5" onClick={() => openEditEventDialog(event)} aria-label={`Edit ${event.title}`}>
+                            <Edit className="h-3.5 w-3.5" aria-hidden="true" />
+                            Edit
+                          </Button>
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            className="gap-1.5"
+                            onClick={() => (total > 0 ? openSeatControl(event) : openManageSeatsDialog(event))}
+                            aria-label={`Seats for ${event.title}`}
+                          >
+                            <Armchair className="h-3.5 w-3.5" aria-hidden="true" />
+                            Seats
+                          </Button>
+                          {/* modal={false}: menu items open dialogs, and a modal menu would leave the page unclickable. */}
+                          <DropdownMenu modal={false}>
+                            <DropdownMenuTrigger asChild>
+                              <Button size="sm" variant="ghost" className="h-9 w-9 p-0" aria-label={`More actions for ${event.title}`}>
+                                {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <MoreHorizontal className="h-4 w-4" />}
+                              </Button>
+                            </DropdownMenuTrigger>
+                            <DropdownMenuContent align="end" className="w-56">
+                              <DropdownMenuItem onSelect={() => navigate(`/admin/bookings?eventId=${event.id}`)}>
+                                <Ticket className="mr-2 h-4 w-4" aria-hidden="true" />
+                                View bookings
+                              </DropdownMenuItem>
+                              <DropdownMenuItem onSelect={() => fetchEventAnalytics(event.id, event.title)}>
+                                <BarChart3 className="mr-2 h-4 w-4" aria-hidden="true" />
+                                Analytics
+                              </DropdownMenuItem>
+                              <DropdownMenuItem onSelect={() => exportBookingsCSV(event.id, event.title)} disabled={exportLoading === event.id}>
+                                <Download className="mr-2 h-4 w-4" aria-hidden="true" />
+                                Export bookings CSV
+                              </DropdownMenuItem>
+                              <DropdownMenuItem asChild>
+                                <Link to={`/events/${event.id}`}>
+                                  <ExternalLink className="mr-2 h-4 w-4" aria-hidden="true" />
+                                  Open event page
+                                </Link>
+                              </DropdownMenuItem>
+                              <DropdownMenuSeparator />
+                              <DropdownMenuItem onSelect={() => openManageSeatsDialog(event)}>
+                                <LayoutGrid className="mr-2 h-4 w-4" aria-hidden="true" />
+                                Seat layout…
+                              </DropdownMenuItem>
+                              {!past && (
+                                <DropdownMenuItem onSelect={() => toggleBookings(event)} disabled={bookingToggleLoading === event.id}>
+                                  {open ? <Lock className="mr-2 h-4 w-4" aria-hidden="true" /> : <Unlock className="mr-2 h-4 w-4" aria-hidden="true" />}
+                                  {open ? "Close bookings" : "Open bookings"}
+                                </DropdownMenuItem>
+                              )}
+                              <DropdownMenuItem onSelect={() => duplicateEvent(event)}>
+                                <Copy className="mr-2 h-4 w-4" aria-hidden="true" />
+                                Duplicate as draft
+                              </DropdownMenuItem>
+                              <DropdownMenuSeparator />
+                              <DropdownMenuItem onSelect={() => askReset(event)} disabled={total === 0}>
+                                <RotateCcw className="mr-2 h-4 w-4" aria-hidden="true" />
+                                Free all seats…
+                              </DropdownMenuItem>
+                              <DropdownMenuItem onSelect={() => askDelete(event)} className="text-destructive focus:text-destructive">
+                                <Trash2 className="mr-2 h-4 w-4" aria-hidden="true" />
+                                Delete event…
+                              </DropdownMenuItem>
+                            </DropdownMenuContent>
+                          </DropdownMenu>
+                        </div>
+                      </li>
+                    );
+                  })}
+                </ul>
               )}
             </CardContent>
           </Card>
@@ -1670,7 +1891,8 @@ export default function AdminDashboard() {
             <CardContent>
               <div className="mb-4">
                 <Input
-                  placeholder="Search bookings..."
+                  placeholder="Search this page of bookings…"
+                  aria-label="Search bookings on this page"
                   value={bookingSearch}
                   onChange={(e) => setBookingSearch(e.target.value)}
                   className="max-w-sm"
@@ -1689,7 +1911,7 @@ export default function AdminDashboard() {
                     <TableCaption className="sr-only">Bookings</TableCaption>
                     <TableHeader className="sticky top-0 z-10 bg-card shadow-[0_1px_0_hsl(var(--border))]">
                       <TableRow>
-                        <TableHead>Booking ID</TableHead>
+                        <TableHead>Ticket No.</TableHead>
                         <TableHead>Event</TableHead>
                         <TableHead>User</TableHead>
                         <TableHead>Date</TableHead>
@@ -1702,7 +1924,10 @@ export default function AdminDashboard() {
                     <TableBody>
                       {filteredBookings.map((booking) => (
                         <TableRow key={booking.id}>
-                          <TableCell className="font-medium">{booking.id.substring(0, 8)}</TableCell>
+                          <TableCell className="font-mono text-xs font-semibold" title={booking.id}>
+                            {/* The first 8 hex digits are a timestamp, the same for a whole batch; the last 8 match the ticket's "No." */}
+                            {booking.id.slice(-8).toUpperCase()}
+                          </TableCell>
                           <TableCell>{booking.events?.title || "Unknown"}</TableCell>
                           <TableCell>
                             {booking.profiles?.first_name || "Unknown"}{" "}
@@ -1744,6 +1969,7 @@ export default function AdminDashboard() {
                               className="text-sm border rounded px-2 py-1 bg-background"
                             >
                               <option value="confirmed">Confirmed</option>
+                              <option value="pending">Pending</option>
                               <option value="cancelled">Cancelled</option>
                               <option value="refunded">Refunded</option>
                             </select>
@@ -1754,6 +1980,7 @@ export default function AdminDashboard() {
                   </Table>
                 </div>
               )}
+              <Pager page={bookingsPage} total={bookingsTotalPages} onPage={(pg) => fetchBookings(pg)} />
             </CardContent>
           </Card>
         </TabsContent>
@@ -1803,7 +2030,8 @@ export default function AdminDashboard() {
             <CardContent>
               <div className="mb-4">
                 <Input
-                  placeholder="Search users..."
+                  placeholder="Search this page of users…"
+                  aria-label="Search users on this page"
                   value={userSearch}
                   onChange={(e) => setUserSearch(e.target.value)}
                   className="max-w-sm"
@@ -1837,7 +2065,7 @@ export default function AdminDashboard() {
                     <TableBody>
                       {filteredUsers.map((u) => (
                         <TableRow key={u.id}>
-                          <TableCell className="font-mono text-xs">{u.id.substring(0, 8)}…</TableCell>
+                          <TableCell className="font-mono text-xs" title={u.id}>…{u.id.slice(-8)}</TableCell>
                           <TableCell>{[u.first_name, u.last_name].filter(Boolean).join(" ") || "N/A"}</TableCell>
                           <TableCell className="text-sm">{u.email || "—"}</TableCell>
                           <TableCell className="text-sm font-mono">{u.student_id || "—"}</TableCell>
@@ -1863,7 +2091,7 @@ export default function AdminDashboard() {
                                 aria-label={`Ban from Event: ${u.email}`}
                                 disabled={!!actionLoading}
                               >
-                                Ban from Event
+                                Event bans
                               </Button>
                               <Button
                                 size="sm"
@@ -1890,6 +2118,7 @@ export default function AdminDashboard() {
                   </Table>
                 </div>
               )}
+              <Pager page={usersPage} total={usersTotalPages} onPage={(pg) => fetchUsers(pg)} />
             </CardContent>
           </Card>
         </TabsContent>
@@ -1897,7 +2126,7 @@ export default function AdminDashboard() {
 
       {/* Event Form Dialog */}
       <Dialog open={showEventDialog} onOpenChange={setShowEventDialog}>
-        <DialogContent className="max-w-2xl">
+        <DialogContent className="max-h-[92vh] max-w-2xl overflow-y-auto">
           <form onSubmit={handleEventSubmit}>
             <DialogHeader>
               <DialogTitle>
@@ -2087,6 +2316,103 @@ export default function AdminDashboard() {
                   />
                 </div>
 
+                {/* ── What this event's tickets print ── */}
+                <fieldset className="rounded-2xl border border-border p-4">
+                  <legend className="px-1 font-display text-xl font-extrabold uppercase">Ticket</legend>
+                  <p className="mb-4 text-xs text-muted-foreground">
+                    What attendees' tickets show for this event. Changes apply to tickets already booked too.
+                  </p>
+                  <div className="grid gap-3">
+                    <div>
+                      <Label htmlFor="tsIssuer">Issued by</Label>
+                      <Input
+                        id="tsIssuer"
+                        value={ticketSettings.issuer ?? ""}
+                        onChange={(e) => setTicket("issuer", e.target.value)}
+                        placeholder="e.g. Invertis University (leave empty for none)"
+                        maxLength={80}
+                      />
+                    </div>
+                    <div className="flex items-center justify-between gap-4 rounded-xl bg-muted/50 px-3 py-2.5">
+                      <Label htmlFor="tsHolder" className="font-normal">Print the attendee's name</Label>
+                      <Switch id="tsHolder" checked={ticketSettings.show_holder} onCheckedChange={(v) => setTicket("show_holder", v)} />
+                    </div>
+                    {(
+                      [
+                        ["show_student_id", "student_id_label", "tsStudentId", "Ask for a student ID"],
+                        ["show_course", "course_label", "tsCourse", "Ask for a course"],
+                      ] as const
+                    ).map(([flag, labelKey, id, text]) => (
+                      <div key={id} className="grid gap-2 rounded-xl bg-muted/50 px-3 py-2.5">
+                        <div className="flex items-center justify-between gap-4">
+                          <Label htmlFor={id} className="font-normal">{text}</Label>
+                          <Switch id={id} checked={ticketSettings[flag]} onCheckedChange={(v) => setTicket(flag, v)} />
+                        </div>
+                        {ticketSettings[flag] && (
+                          <div className="flex items-center gap-3">
+                            <Label htmlFor={`${id}Label`} className="shrink-0 text-xs text-muted-foreground">
+                              Shown as
+                            </Label>
+                            <Input
+                              id={`${id}Label`}
+                              value={ticketSettings[labelKey]}
+                              onChange={(e) => setTicket(labelKey, e.target.value)}
+                              maxLength={40}
+                              className="h-9"
+                            />
+                          </div>
+                        )}
+                      </div>
+                    ))}
+                    <div>
+                      <Label htmlFor="tsNote">Note on the ticket (optional)</Label>
+                      <Input
+                        id="tsNote"
+                        value={ticketSettings.note ?? ""}
+                        onChange={(e) => setTicket("note", e.target.value)}
+                        placeholder="e.g. Entry from Gate 3 · Doors open 6:30 PM"
+                        maxLength={160}
+                      />
+                    </div>
+                    {/* Live preview: the real ticket face, scaled down, with sample attendee details. */}
+                    <div aria-hidden="true" className="overflow-x-auto rounded-xl bg-muted/50 p-3">
+                      <p className="mb-2 text-xs font-medium text-muted-foreground">Preview</p>
+                      <div style={{ width: 760, zoom: 0.72 }}>
+                        <div className="tk-scene">
+                          <TicketFront
+                            qr=""
+                            t={{
+                              bookingId: "preview",
+                              ref: "PREVIEW1",
+                              status: "confirmed",
+                              checkedIn: false,
+                              title: eventTitle || "Your event",
+                              category: eventCategory,
+                              date: eventDate ? fromLocalDateTimeParts(eventDate, eventTime).toISOString() : "",
+                              time: eventTime
+                                ? new Date(`2000-01-01T${eventTime}`).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" })
+                                : "",
+                              venue: eventLocation,
+                              imageUrl: null,
+                              isFree: isFreeEvent,
+                              total: isFreeEvent ? 0 : parseFloat(eventPrice) || 0,
+                              seats: [{ row: "C", number: 7, type: "standard" }],
+                              bookedAt: "",
+                              holder: ticketSettings.show_holder ? "Asha Verma" : "",
+                              studentId: ticketSettings.show_student_id ? "BCS2022171" : "",
+                              course: ticketSettings.show_course ? "B.Tech CSE" : "",
+                              issuer: ticketSettings.issuer?.trim() ?? "",
+                              studentIdLabel: ticketSettings.student_id_label || "Student ID",
+                              courseLabel: ticketSettings.course_label || "Course",
+                              note: ticketSettings.note?.trim() ?? "",
+                            }}
+                          />
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </fieldset>
+
                 <div className="flex items-center space-x-2">
                   <Switch
                     id="publishEvent"
@@ -2106,7 +2432,9 @@ export default function AdminDashboard() {
               >
                 Cancel
               </Button>
-              <Button type="submit">Save Event</Button>
+              <Button type="submit" disabled={savingEvent}>
+                {savingEvent ? "Saving…" : "Save event"}
+              </Button>
             </DialogFooter>
           </form>
         </DialogContent>
@@ -2703,6 +3031,26 @@ export default function AdminDashboard() {
                 This will ban the user from: <span className="font-medium">{banContext.eventTitle}</span>
               </div>
             )}
+            {(() => {
+              // Bans used to be one-way: nothing listed them, so a mistaken ban was permanent.
+              const bannedFrom = events.filter((ev) => (ev.banned_users ?? []).map(String).includes(String(banContext.userId)));
+              if (bannedFrom.length === 0) return null;
+              return (
+                <div className="rounded-xl border border-border p-3">
+                  <p className="mb-2 text-sm font-medium">Already banned from</p>
+                  <ul className="space-y-2">
+                    {bannedFrom.map((ev) => (
+                      <li key={ev.id} className="flex items-center justify-between gap-3 text-sm">
+                        <span className="truncate">{ev.title}</span>
+                        <Button size="sm" variant="outline" onClick={() => unbanUserFromEvent(ev.id, String(banContext.userId))}>
+                          Unban
+                        </Button>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              );
+            })()}
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setShowBanDialog(false)}>Cancel</Button>
@@ -2719,6 +3067,43 @@ export default function AdminDashboard() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      {/* Shared confirmation for destructive actions */}
+      <AlertDialog
+        open={!!confirmRequest}
+        onOpenChange={(open) => {
+          if (!open && !confirmBusy) setConfirmRequest(null);
+        }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>{shownConfirm?.title}</AlertDialogTitle>
+            <AlertDialogDescription>{shownConfirm?.description}</AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={confirmBusy}>Keep it</AlertDialogCancel>
+            <AlertDialogAction
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+              disabled={confirmBusy}
+              onClick={async (e) => {
+                e.preventDefault(); // stay open (and busy) until the action finishes
+                if (!confirmRequest) return;
+                setConfirmBusy(true);
+                try {
+                  await confirmRequest.run();
+                } catch (err: any) {
+                  toast({ title: "Error", description: err?.message || "Something went wrong", variant: "destructive" });
+                } finally {
+                  setConfirmBusy(false);
+                  setConfirmRequest(null);
+                }
+              }}
+            >
+              {confirmBusy ? "Working…" : shownConfirm?.confirmLabel}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
 
       {/* User Detail Dialog */}
       <Dialog open={showUserDialog} onOpenChange={setShowUserDialog}>

@@ -45,7 +45,7 @@ export function Footer() {
           {/* Brand + tagline */}
           <div className="sm:col-span-2 lg:col-span-1">
             <Link to="/" className="inline-flex items-center gap-0.5 mb-4">
-              <span className="font-display font-bold text-xl tracking-tight text-foreground">SeatSync</span>
+              <span className="font-display font-extrabold text-2xl uppercase tracking-wide text-foreground">SeatSync</span>
               <span className="text-primary font-bold text-2xl leading-none">.</span>
             </Link>
             <p className="text-sm text-muted-foreground leading-relaxed max-w-xs">
@@ -124,6 +124,13 @@ export function Footer() {
           <p className="text-xs text-muted-foreground">© {currentYear} SeatSync. All rights reserved.</p>
           <p className="text-xs text-muted-foreground">Built for live experiences</p>
         </div>
+      </div>
+
+      {/* Sign-off: the name as a giant marquee letter set, cropped by the page edge. */}
+      <div aria-hidden="true" className="pointer-events-none select-none overflow-hidden">
+        <p className="lp-wordmark translate-y-[14%] whitespace-nowrap text-center font-display font-extrabold uppercase">
+          SeatSync<span className="text-primary/70">.</span>
+        </p>
       </div>
     </footer>
   );

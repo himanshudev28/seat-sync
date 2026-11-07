@@ -21,7 +21,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     if (eventId) filter.event_id = objectId(eventId);
 
     const pageNum = clampInt(page, 1, 1, 100_000);
-    const limitNum = clampInt(limit, 50, 1, 100);
+    const limitNum = clampInt(limit, 50, 1, 500);
     const skip = (pageNum - 1) * limitNum;
 
     const [bookings, total] = await Promise.all([
@@ -40,6 +40,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       user_id: unknown;
       total_price: number;
       status: string;
+      checked_in?: boolean;
+      checked_in_at?: Date | null;
       created_at: Date;
     }>;
 
@@ -62,6 +64,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         total_price: b.total_price,
         is_free: ev?.is_free ?? false,
         status: b.status,
+        checked_in: b.checked_in ?? false,
+        checked_in_at: b.checked_in_at ?? null,
         created_at: b.created_at,
         events: ev ? { title: ev.title, is_free: ev.is_free } : null,
         profiles: u ? { first_name: u.first_name, last_name: u.last_name, email: u.email } : null,

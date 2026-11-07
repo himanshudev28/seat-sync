@@ -1,0 +1,580 @@
+/* ══════════════════════════════════════════════════════════════════════
+   LANDING PAGE — "the venue"
+   Scoped to the home page (imported by pages/Index). Every class is
+   prefixed lp- so nothing leaks into the app's other screens.
+
+   All motion lives inside `prefers-reduced-motion: no-preference`; with
+   reduced motion the page renders in its final, static state.
+══════════════════════════════════════════════════════════════════════ */
+
+/* Venue camera angles. Registered so they interpolate (entrance + idle
+   drift). Not inherited: only the plane and the seat pin read them, and an
+   inherited value would restyle all ~270 seats on every frame. The pin gets
+   the same values (same animations in CSS, same writes from VenueScene). */
+@property --vx {
+  syntax: "<angle>";
+  inherits: false;
+  initial-value: 56deg;
+}
+@property --vz {
+  syntax: "<angle>";
+  inherits: false;
+  initial-value: -16deg;
+}
+
+:root {
+  --lp-glow: 4 86% 58%;          /* stage light: decoration only, never text */
+  --lp-floor: 15 35% 96%;
+  --lp-floor-edge: 15 18% 86%;
+  --lp-step: 15 20% 90%;
+  --lp-seat-taken: 20 10% 82%;
+  --lp-beam: 0.14;
+  --lp-dot: 20 10% 20%;
+
+  /* "Ink" sections: dark in light mode, a lifted surface in dark mode. */
+  --lp-ink: 20 14% 7%;
+  --lp-ink-raised: 20 10% 12%;
+  --lp-ink-fg: 20 12% 95%;
+  --lp-ink-muted: 20 6% 70%;     /* 9.6:1 on --lp-ink */
+  --lp-ink-line: 20 8% 20%;
+}
+
+.dark {
+  --lp-glow: 5 100% 66%;
+  --lp-floor: 20 11% 11%;
+  --lp-floor-edge: 20 9% 6%;
+  --lp-step: 20 9% 15%;
+  --lp-seat-taken: 20 7% 24%;
+  --lp-beam: 0.24;
+  --lp-dot: 20 10% 90%;
+
+  --lp-ink: 20 10% 11%;
+  --lp-ink-raised: 20 9% 15%;
+  --lp-ink-fg: 20 10% 94%;
+  --lp-ink-muted: 20 6% 68%;     /* 7.4:1 on --lp-ink */
+  --lp-ink-line: 20 8% 22%;
+}
+
+/* ── Hero ───────────────────────────────────────────────────────────── */
+.lp-hero-title {
+  font-size: clamp(3.5rem, 16vw, 5.5rem);
+  line-height: 0.86;
+  letter-spacing: -0.01em;
+  font-weight: 800;
+}
+/* Side by side with the venue: size to the narrower column. */
+@media (min-width: 1024px) {
+  .lp-hero-title {
+    font-size: clamp(3.4rem, 7.2vw, 6rem);
+  }
+}
+
+/* Each headline line is clipped so its text can rise into place. */
+.lp-line {
+  display: block;
+  overflow: hidden;
+  padding-block: 0.03em;
+}
+.lp-line > span {
+  display: block;
+}
+
+/* Dotted "blueprint" field behind the venue, fading out at the edges. */
+.lp-dots {
+  background-image: radial-gradient(hsl(var(--lp-dot) / 0.13) 1px, transparent 1.4px);
+  background-size: 22px 22px;
+  -webkit-mask-image: radial-gradient(ellipse 70% 60% at 65% 45%, #000 20%, transparent 75%);
+  mask-image: radial-gradient(ellipse 70% 60% at 65% 45%, #000 20%, transparent 75%);
+}
+
+.lp-hero-glow {
+  background:
+    radial-gradient(ellipse 45% 40% at 70% 62%, hsl(var(--lp-glow) / 0.22), transparent 70%),
+    radial-gradient(ellipse 35% 30% at 15% 10%, hsl(var(--lp-glow) / 0.08), transparent 70%);
+}
+
+/* Stage lighting: soft cones from the rig above. */
+/* The blur sits on the beam and the cone shape on its ::before, so the blur
+   softens the cone's edges instead of being clipped by them. */
+.lp-beam {
+  position: absolute;
+  top: -8%;
+  width: clamp(120px, 13vw, 220px);
+  height: 115%;
+  transform-origin: 50% 0;
+  filter: blur(26px);
+  pointer-events: none;
+}
+.lp-beam::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(to bottom, hsl(var(--lp-glow) / var(--lp-beam)), hsl(var(--lp-glow) / 0) 70%);
+  clip-path: polygon(46% 0, 54% 0, 100% 100%, 0 100%);
+}
+.dark .lp-beam {
+  mix-blend-mode: screen;
+}
+
+/* ── The venue (CSS 3D) ─────────────────────────────────────────────── */
+.lp-venue {
+  container-type: inline-size;
+  position: relative;
+  width: 100%;
+  aspect-ratio: 100 / 74;
+}
+
+/* Perspective lives here, not on .lp-venue, so the rig can fade without
+   flattening the 3D scene (opacity < 1 forces transform-style: flat). */
+.lp-rig {
+  position: absolute;
+  inset: 0;
+  perspective: 190cqw;
+  perspective-origin: 50% -10%;
+}
+
+.lp-plane {
+  position: absolute;
+  left: 0;
+  top: 6cqw;
+  width: 100cqw;
+  height: 68cqw;
+  transform-style: preserve-3d;
+  transform-origin: 50% 70%;
+  transform: rotateX(var(--vx)) rotateZ(var(--vz));
+  border-radius: 4cqw;
+  background:
+    radial-gradient(ellipse 34% 28% at 50% 88%, hsl(var(--lp-glow) / 0.32), transparent 70%),
+    hsl(var(--lp-floor));
+  box-shadow: inset 0 0 0 1px hsl(var(--lp-floor-edge));
+}
+
+/* Slab thickness: faces folded down from the floor's edges. */
+.lp-slab {
+  position: absolute;
+  background: hsl(var(--lp-floor-edge));
+}
+.lp-slab-front {
+  left: 4cqw;
+  right: 4cqw;
+  top: 100%;
+  height: 2.6cqw;
+  transform-origin: 50% 0;
+  transform: rotateX(-90deg);
+}
+.lp-slab-left,
+.lp-slab-right {
+  top: 4cqw;
+  bottom: 4cqw;
+  width: 2.6cqw;
+}
+.lp-slab-left {
+  right: 100%;
+  transform-origin: 100% 50%;
+  transform: rotateY(90deg);
+}
+.lp-slab-right {
+  left: 100%;
+  transform-origin: 0 50%;
+  transform: rotateY(-90deg);
+}
+
+.lp-stage {
+  position: absolute;
+  left: 50%;
+  top: 60cqw;
+  width: 22cqw;
+  height: 11cqw;
+  translate: -50% -100%;
+  transform: translateZ(0.8cqw);
+  border-radius: 11cqw 11cqw 0.6cqw 0.6cqw;
+  background:
+    radial-gradient(ellipse 80% 120% at 50% 100%, hsl(var(--lp-glow)), hsl(var(--lp-glow) / 0.75) 55%, hsl(var(--lp-glow) / 0.5));
+  box-shadow: 0 0 7cqw hsl(var(--lp-glow) / 0.55);
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  padding-bottom: 1.6cqw;
+}
+.lp-stage span {
+  font-family: "Big Shoulders Variable", "Big Shoulders", "Arial Narrow", sans-serif;
+  font-weight: 800;
+  font-size: 2.2cqw;
+  letter-spacing: 0.4em;
+  color: hsl(0 0% 100% / 0.92);
+  padding-left: 0.4em; /* optically centre the tracked word */
+}
+
+.lp-row {
+  position: absolute;
+  inset: 0;
+  transform-style: preserve-3d;
+  transform: translateZ(calc(var(--r) * 1.25cqw));
+}
+.lp-step {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+}
+.lp-step path {
+  fill: none;
+  stroke: hsl(var(--lp-step));
+  stroke-width: 3.9;
+  stroke-linecap: round;
+}
+
+.lp-seat {
+  --tier: var(--seat-economy);
+  position: absolute;
+  width: 2.15cqw;
+  height: 1.85cqw;
+  margin: -0.92cqw 0 0 -1.07cqw;
+  border-radius: 0.55cqw 0.55cqw 0.3cqw 0.3cqw;
+  rotate: var(--a);
+  /* backrest + cushion */
+  background: linear-gradient(to bottom, rgb(var(--tier)) 0 38%, rgb(var(--tier) / 0.78) 38%);
+  transition:
+    background 0.6s ease,
+    box-shadow 0.6s ease,
+    scale 0.6s cubic-bezier(0.16, 1, 0.3, 1);
+}
+.lp-seat[data-tier="premium"] { --tier: var(--seat-premium); }
+.lp-seat[data-tier="standard"] { --tier: var(--seat-standard); }
+
+.lp-seat[data-s="t"] {
+  background: hsl(var(--lp-seat-taken));
+}
+.lp-seat[data-s="f"] {
+  background: hsl(var(--lp-glow));
+  box-shadow: 0 0 1.6cqw hsl(var(--lp-glow) / 0.9);
+  scale: 1.45;
+  transition-duration: 0.18s;
+}
+.lp-seat[data-s="me"] {
+  background: hsl(var(--lp-glow));
+  box-shadow:
+    0 0 0 0.4cqw hsl(var(--lp-glow) / 0.3),
+    0 0 2.2cqw hsl(var(--lp-glow));
+  scale: 1.25;
+}
+
+/* "Your seat" marker: stands upright by undoing the plane's rotation. */
+.lp-pin {
+  position: absolute;
+  transform-origin: 50% 100%;
+  transform: translate(-50%, -100%) translateZ(1.2cqw) rotateZ(calc(var(--vz) * -1))
+    rotateX(calc(var(--vx) * -1));
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  pointer-events: none;
+}
+.lp-pin-card {
+  white-space: nowrap;
+  border-radius: 999px;
+  padding: 0.7cqw 1.6cqw;
+  font-size: clamp(9px, 1.75cqw, 13px);
+  font-weight: 600;
+  line-height: 1.2;
+  color: hsl(var(--primary-foreground));
+  background: hsl(var(--primary));
+  box-shadow: 0 1cqw 3cqw -0.6cqw hsl(var(--lp-glow) / 0.7);
+}
+.lp-pin-stem {
+  width: 2px;
+  height: 6cqw;
+  background: linear-gradient(hsl(var(--primary)), hsl(var(--primary) / 0));
+}
+
+/* Real spotlight events, floating in front of the venue. */
+.lp-float {
+  /* --px/--py are already eased by the venue's animation loop. */
+  transform: translate3d(calc(var(--px, 0) * var(--depth, 12px)), calc(var(--py, 0) * var(--depth, 12px)), 0);
+}
+
+/* ── Marquee tape ───────────────────────────────────────────────────── */
+.lp-tape {
+  rotate: -2.2deg;
+  margin-inline: -4vw;
+}
+.lp-marquee {
+  display: flex;
+  width: max-content;
+}
+
+/* ── Tilt + glare (pointer devices) ─────────────────────────────────── */
+.lp-tilt {
+  transform: perspective(1100px) rotateX(var(--tilt-x, 0deg)) rotateY(var(--tilt-y, 0deg));
+  transition: transform 0.7s cubic-bezier(0.16, 1, 0.3, 1);
+}
+.lp-tilt[data-tilting] {
+  transition-duration: 0.12s;
+}
+.lp-glare {
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  pointer-events: none;
+  background: radial-gradient(circle at var(--glare-x, 50%) var(--glare-y, 50%), rgb(255 255 255 / 0.32), transparent 55%);
+  mix-blend-mode: overlay;
+  opacity: 0;
+  transition: opacity 0.4s ease;
+}
+.lp-tilt[data-tilting] .lp-glare {
+  opacity: 1;
+}
+
+/* ── Ink sections ───────────────────────────────────────────────────── */
+.lp-ink {
+  background: hsl(var(--lp-ink));
+  color: hsl(var(--lp-ink-fg));
+}
+.lp-ink-muted {
+  color: hsl(var(--lp-ink-muted));
+}
+
+/* Step list: the step at the reading line is lit. Only colour changes, so
+   the other steps' text keeps full contrast. */
+.lp-step-title {
+  transition: color 0.5s ease;
+}
+@media (min-width: 1024px) {
+  .lp-step-item:not([data-active]) .lp-step-title {
+    color: hsl(var(--lp-ink-muted));
+  }
+}
+.lp-step-num {
+  -webkit-text-stroke: 1.5px hsl(var(--lp-ink-fg) / 0.5);
+  color: transparent;
+  transition: color 0.5s ease, -webkit-text-stroke-color 0.5s ease;
+}
+.lp-step-item[data-active] .lp-step-num {
+  color: hsl(var(--primary));
+  -webkit-text-stroke-color: transparent;
+}
+
+/* 3D device in "How it works" */
+.lp-device {
+  transform-style: preserve-3d;
+  transform: perspective(1400px) rotateY(-16deg) rotateX(7deg) rotateZ(1deg);
+}
+.lp-screen {
+  transition:
+    opacity 0.55s ease,
+    transform 0.7s cubic-bezier(0.16, 1, 0.3, 1);
+}
+.lp-screen:not([data-active]) {
+  opacity: 0;
+  transform: translateY(14px) scale(0.98);
+  pointer-events: none;
+}
+.lp-chip3d {
+  transform: translateZ(70px);
+  transition:
+    opacity 0.5s ease,
+    transform 0.7s cubic-bezier(0.16, 1, 0.3, 1);
+}
+.lp-chip3d:not([data-active]) {
+  opacity: 0;
+  transform: translateZ(70px) translateY(10px);
+}
+
+/* ── Ticket CTA ─────────────────────────────────────────────────────── */
+/* Notches are cut with a mask at the perforation line. The shadow sits on
+   the parent (.lp-ticket-shadow) because a mask would clip it. */
+.lp-ticket-shadow {
+  filter: drop-shadow(0 30px 40px hsl(var(--lp-glow) / 0.28)) drop-shadow(0 6px 10px rgb(0 0 0 / 0.12));
+}
+.lp-ticket {
+  --notch: 18px;
+  --perf-y: calc(100% - 132px);
+  -webkit-mask:
+    radial-gradient(circle var(--notch) at 0 var(--perf-y), #0000 98%, #000) left / 51% 100% no-repeat,
+    radial-gradient(circle var(--notch) at 100% var(--perf-y), #0000 98%, #000) right / 51% 100% no-repeat;
+  mask:
+    radial-gradient(circle var(--notch) at 0 var(--perf-y), #0000 98%, #000) left / 51% 100% no-repeat,
+    radial-gradient(circle var(--notch) at 100% var(--perf-y), #0000 98%, #000) right / 51% 100% no-repeat;
+}
+.lp-perf {
+  border-top: 2px dashed hsl(var(--primary-foreground) / 0.45);
+}
+@media (min-width: 768px) {
+  .lp-ticket {
+    --perf-x: calc(100% - 210px);
+    -webkit-mask:
+      radial-gradient(circle var(--notch) at var(--perf-x) 0, #0000 98%, #000) top / 100% 51% no-repeat,
+      radial-gradient(circle var(--notch) at var(--perf-x) 100%, #0000 98%, #000) bottom / 100% 51% no-repeat;
+    mask:
+      radial-gradient(circle var(--notch) at var(--perf-x) 0, #0000 98%, #000) top / 100% 51% no-repeat,
+      radial-gradient(circle var(--notch) at var(--perf-x) 100%, #0000 98%, #000) bottom / 100% 51% no-repeat;
+  }
+  .lp-perf {
+    border-top: 0;
+    border-left: 2px dashed hsl(var(--primary-foreground) / 0.45);
+  }
+}
+.lp-barcode {
+  background: repeating-linear-gradient(
+    90deg,
+    currentColor 0 2px,
+    transparent 2px 4px,
+    currentColor 4px 5px,
+    transparent 5px 8px,
+    currentColor 8px 11px,
+    transparent 11px 12px
+  );
+}
+
+/* ── Footer wordmark ────────────────────────────────────────────────── */
+.lp-wordmark {
+  font-size: clamp(5rem, 24vw, 22rem);
+  line-height: 0.78;
+  letter-spacing: -0.02em;
+  color: hsl(var(--foreground) / 0.07);
+}
+
+/* The static first-paint copy in index.html shows the hero in its final state, and once it has
+   been seen React's copy must not replay the entrance (main.tsx sets data-booted). */
+#boot-shell .lp-line > span,
+#boot-shell .lp-in,
+[data-booted] .lp-line > span,
+[data-booted] .lp-in {
+  animation: none !important;
+}
+
+/* ══════════════════════════════════════════════════════════════════════
+   MOTION — only for people who haven't asked for less of it.
+══════════════════════════════════════════════════════════════════════ */
+@media (prefers-reduced-motion: no-preference) {
+  /* Headline lines rise out of their clip, one after another. */
+  .lp-line > span {
+    animation: lp-rise 1.05s cubic-bezier(0.16, 1, 0.3, 1) both;
+    animation-delay: calc(120ms + var(--i, 0) * 95ms);
+  }
+  .lp-in {
+    animation: lp-fade-up 0.9s cubic-bezier(0.16, 1, 0.3, 1) both;
+    animation-delay: var(--d, 0ms);
+  }
+
+  /* The camera swings down onto the venue. */
+  .lp-rig {
+    animation: lp-fade 0.9s ease-out 100ms both;
+  }
+  .lp-plane {
+    animation: lp-venue-in 1.9s cubic-bezier(0.16, 1, 0.3, 1) 100ms backwards;
+  }
+  .lp-pin {
+    animation:
+      lp-fade 0.6s ease-out 1.6s backwards,
+      lp-venue-in 1.9s cubic-bezier(0.16, 1, 0.3, 1) 100ms backwards;
+  }
+  /* Touch screens have no cursor to follow: drift slowly instead. */
+  @media (hover: none), (pointer: coarse) {
+    .lp-plane {
+      animation:
+        lp-venue-in 1.9s cubic-bezier(0.16, 1, 0.3, 1) 100ms backwards,
+        lp-venue-drift 11s ease-in-out 2s infinite alternate;
+    }
+    .lp-pin {
+      animation:
+        lp-fade 0.6s ease-out 1.6s backwards,
+        lp-venue-in 1.9s cubic-bezier(0.16, 1, 0.3, 1) 100ms backwards,
+        lp-venue-drift 11s ease-in-out 2s infinite alternate;
+    }
+  }
+  .lp-seat {
+    animation: lp-seat-in 0.7s cubic-bezier(0.16, 1, 0.3, 1) backwards;
+    animation-delay: calc(450ms + var(--r) * 75ms + var(--k) * 5ms);
+  }
+  .lp-seat[data-s="me"] {
+    animation:
+      lp-seat-in 0.7s cubic-bezier(0.16, 1, 0.3, 1) backwards,
+      lp-seat-ping 2.4s ease-out 2.2s infinite;
+    animation-delay: calc(450ms + var(--r) * 75ms + var(--k) * 5ms), 2.2s;
+  }
+  .lp-beam {
+    animation: lp-sway 9s ease-in-out infinite alternate;
+    animation-delay: var(--d, 0s);
+  }
+  .lp-bob {
+    animation: lp-bob 6s ease-in-out infinite;
+    animation-delay: var(--d, 0s);
+  }
+  /* Set by VenueScene while the hero is off screen. */
+  [data-lp-paused] :is(.lp-plane, .lp-pin, .lp-beam, .lp-bob, .lp-seat) {
+    animation-play-state: paused;
+  }
+
+  /* Scroll-linked: the venue sinks and dims as the hero scrolls away, and
+     sections settle in as they arrive. Unsupported browsers keep the static,
+     fully visible layout. */
+  @supports (animation-timeline: view()) {
+    .lp-venue-scroll {
+      animation: lp-venue-out linear both;
+      animation-timeline: view();
+      animation-range: exit 0% exit 90%;
+    }
+    .lp-reveal {
+      animation: lp-reveal linear both;
+      animation-timeline: view();
+      animation-range: entry 0% entry 70%;
+    }
+    /* The tape slides as the page scrolls and never moves on its own, so
+       there is nothing to pause (WCAG 2.2.2). */
+    .lp-marquee {
+      animation: lp-tape-slide linear both;
+      animation-timeline: view();
+      animation-range: cover;
+    }
+  }
+}
+
+@keyframes lp-rise {
+  from { transform: translateY(108%); }
+  to { transform: none; }
+}
+@keyframes lp-fade {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+/* Slide only, no fade: text that starts transparent isn't "painted" yet, which pushed
+   Largest Contentful Paint back by the whole animation. */
+@keyframes lp-fade-up {
+  from { transform: translateY(16px); }
+  to { transform: none; }
+}
+@keyframes lp-venue-in {
+  from { --vx: 78deg; --vz: -48deg; }
+}
+@keyframes lp-venue-drift {
+  from { --vz: -21deg; --vx: 57deg; }
+  to { --vz: -9deg; --vx: 53deg; }
+}
+@keyframes lp-seat-in {
+  from { scale: 0; opacity: 0; }
+}
+@keyframes lp-seat-ping {
+  0% { box-shadow: 0 0 0 0 hsl(var(--lp-glow) / 0.6), 0 0 2.2cqw hsl(var(--lp-glow)); }
+  70%, 100% { box-shadow: 0 0 0 1.6cqw hsl(var(--lp-glow) / 0), 0 0 2.2cqw hsl(var(--lp-glow)); }
+}
+@keyframes lp-sway {
+  from { transform: rotate(var(--from, -8deg)); }
+  to { transform: rotate(var(--to, 8deg)); }
+}
+@keyframes lp-bob {
+  0%, 100% { translate: 0 0; }
+  50% { translate: 0 -10px; }
+}
+@keyframes lp-tape-slide {
+  from { transform: translateX(-2%); }
+  to { transform: translateX(-14%); }
+}
+@keyframes lp-venue-out {
+  to { transform: translateY(-10%) scale(0.9); opacity: 0.25; }
+}
+@keyframes lp-reveal {
+  from { opacity: 0; transform: translateY(48px) scale(0.985); }
+  to { opacity: 1; transform: none; }
+}

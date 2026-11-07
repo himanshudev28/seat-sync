@@ -37,16 +37,15 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       if (!userId) return res.status(400).json({ error: 'userId is required for ban_user action' });
       const event = await Event.findById(eventId).lean();
       if (!event) return res.status(404).json({ error: 'Event not found' });
-      const banned = (event as any).banned_users || [];
-      if (!banned.includes(userId)) {
-        update.banned_users = [...banned, userId];
-      }
+      // Atomic $addToSet: a read-modify-write here lost concurrent bans.
+      const added = await Event.findByIdAndUpdate(eventId, { $addToSet: { banned_users: userId } }, { new: true }).lean();
+      return res.status(200).json(added);
     } else if (action === 'unban_user') {
       if (!userId) return res.status(400).json({ error: 'userId is required for unban_user action' });
       const event = await Event.findById(eventId).lean();
       if (!event) return res.status(404).json({ error: 'Event not found' });
-      const banned = (event as any).banned_users || [];
-      update.banned_users = banned.filter((id: string) => id !== userId);
+      const pulled = await Event.findByIdAndUpdate(eventId, { $pull: { banned_users: userId } }, { new: true }).lean();
+      return res.status(200).json(pulled);
     } else if (action === 'toggle_featured') {
       const event = await Event.findById(eventId).lean();
       if (!event) return res.status(404).json({ error: 'Event not found' });
@@ -56,7 +55,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       if (!event) return res.status(404).json({ error: 'Event not found' });
       const next = !(event as any).is_spotlight;
       if (next) {
-        const current = await Event.countDocuments({ is_spotlight: true, _id: { $ne: eventId } });
+        const current = await Event.countDocuments({
+          // Only events the curation UI shows: drafts and past events must not hold a slot.
+          is_spotlight: true, is_published: true, date: { $gte: new Date() }, _id: { $ne: eventId },
+        });
         if (current >= SPOTLIGHT_LIMIT) {
           return res.status(409).json({
             error: `Only ${SPOTLIGHT_LIMIT} events can be spotlighted. Remove one first.`,

@@ -12,7 +12,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
   try {
     const admin = await requireAdmin(req);
-    rateLimit(req, { bucket: 'ai-description', limit: 20, windowMs: 60 * 60_000, key: admin.userId });
+    await rateLimit(req, { bucket: 'ai-description', limit: 20, windowMs: 60 * 60_000, key: admin.userId });
 
     const body = (req.body ?? {}) as Record<string, unknown>;
     const title = str(body.title, { min: 1, max: 200 });

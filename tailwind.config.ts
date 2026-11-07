@@ -19,8 +19,8 @@ export default {
 			}
 		},
 		fontFamily: {
-			display: ['Space Grotesk', 'sans-serif'],
-			sans: ['Inter', 'ui-sans-serif', 'system-ui', 'sans-serif'],
+			display: ['"Big Shoulders Variable"', '"Big Shoulders"', '"Arial Narrow"', 'sans-serif'],
+			sans: ['"Inter Variable"', '"Inter Fallback"', 'Inter', 'ui-sans-serif', 'system-ui', 'sans-serif'],
 			mono: ['JetBrains Mono', 'ui-monospace', 'monospace'],
 		},
 		extend: {

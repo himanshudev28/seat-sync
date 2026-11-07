@@ -33,5 +33,23 @@ export function pickEventFields(body: unknown, partial: boolean): Record<string,
   if (has('max_tickets_per_event')) {
     out.max_tickets_per_event = b.max_tickets_per_event === null ? null : clampInt(b.max_tickets_per_event, 0, 0, 1_000_000);
   }
+  if (has('ticket_settings')) out.ticket_settings = pickTicketSettings(b.ticket_settings);
   return out;
+}
+
+/** Ticket layout chosen by the admin (what the printed ticket shows). Always stored whole. */
+export function pickTicketSettings(v: unknown): Record<string, unknown> {
+  if (!v || typeof v !== 'object' || Array.isArray(v)) throw badRequest('Invalid ticket settings');
+  const t = v as Record<string, unknown>;
+  const text = (x: unknown, max: number) => (x === null || x === undefined || x === '' ? null : str(x, { max }) || null);
+  const label = (x: unknown, fallback: string) => text(x, 40) ?? fallback;
+  return {
+    issuer: text(t.issuer, 80),
+    show_holder: t.show_holder === undefined ? true : bool(t.show_holder),
+    show_student_id: t.show_student_id === undefined ? true : bool(t.show_student_id),
+    show_course: t.show_course === undefined ? true : bool(t.show_course),
+    student_id_label: label(t.student_id_label, 'Student ID'),
+    course_label: label(t.course_label, 'Course'),
+    note: text(t.note, 160),
+  };
 }

@@ -8,7 +8,7 @@ import User from '../../models/User.js';
 import Event from '../../models/Event.js';
 import { setCorsHeaders } from '../_utils/cors.js';
 import { requireAdmin } from '../_utils/auth.js';
-import { badRequest, handleApiError, notFound } from '../_utils/http.js';
+import { HttpError, badRequest, handleApiError, notFound } from '../_utils/http.js';
 import { clampInt, escapeRegex, objectId, str } from '../_utils/validate.js';
 import { BOOKING_STATUSES, setBookingStatus, type BookingStatus } from '../bookings/_status.js';
 
@@ -20,11 +20,25 @@ function validDate(v: unknown): Date {
   return d;
 }
 
+const DAY_MS = 86_400_000;
+
+/** 'YYYY-MM-DD' (or any date string) -> start of that calendar day in the admin's timezone. */
+function dayStart(v: unknown, tzMinutes: number): Date {
+  const d = validDate(v);
+  // Date-only strings parse as UTC midnight; shift by the client's getTimezoneOffset().
+  const utcMidnight = Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate());
+  return new Date(utcMidnight + tzMinutes * 60_000);
+}
+
 function buildFilter(query: Record<string, unknown>) {
   const filter: Record<string, unknown> = {};
 
   if (query.eventId) filter.event_id = objectId(query.eventId);
-  if (query.status) {
+  if (query.status === 'checked-in') {
+    // The UI offers "checked-in" as a status; it is a flag on confirmed bookings.
+    filter.checked_in = true;
+    filter.status = 'confirmed';
+  } else if (query.status) {
     if (typeof query.status !== 'string' || !BOOKING_STATUSES.includes(query.status as BookingStatus)) {
       throw badRequest('Invalid status');
     }
@@ -33,9 +47,12 @@ function buildFilter(query: Record<string, unknown>) {
   if (query.checked_in !== undefined) filter.checked_in = query.checked_in === 'true';
 
   if (query.dateFrom || query.dateTo) {
+    const tz = query.tz === undefined || query.tz === '' ? 0 : Number(query.tz);
+    if (!Number.isFinite(tz) || Math.abs(tz) > 14 * 60) throw badRequest('Invalid tz');
+    // Whole days: [start of dateFrom, start of the day after dateTo).
     const dateFilter: Record<string, Date> = {};
-    if (query.dateFrom) dateFilter.$gte = validDate(query.dateFrom);
-    if (query.dateTo) dateFilter.$lte = validDate(query.dateTo);
+    if (query.dateFrom) dateFilter.$gte = dayStart(query.dateFrom, tz);
+    if (query.dateTo) dateFilter.$lt = new Date(dayStart(query.dateTo, tz).getTime() + DAY_MS);
     filter.created_at = dateFilter;
   }
 
@@ -216,7 +233,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       const limitNum = clampInt(q.limit, 20, 1, 100);
       const skip = (pageNum - 1) * limitNum;
 
-      const filter = buildFilter({ eventId: q.eventId, status: q.status, checked_in: q.checked_in, dateFrom: q.dateFrom, dateTo: q.dateTo });
+      const filter = buildFilter({ eventId: q.eventId, status: q.status, checked_in: q.checked_in, dateFrom: q.dateFrom, dateTo: q.dateTo, tz: q.tz });
       const { bookings, total } = await getBookingsWithDetails(filter, { skip, limit: limitNum, search: q.search });
 
       return res.status(200).json({
@@ -254,8 +271,15 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         // Moves seats in the same transaction (frees them and drops the BookingSeat links).
         booking = await setBookingStatus(id, status as BookingStatus, extra);
       } else {
-        booking = await Booking.findByIdAndUpdate(id, { $set: extra }, { new: true }).lean();
-        if (!booking) throw notFound('Booking not found');
+        // Only a confirmed booking can be checked in (same rule as admin/checkin.ts); undoing is always allowed.
+        const cond: Record<string, unknown> = extra.checked_in === true ? { _id: id, status: 'confirmed' } : { _id: id };
+        booking = await Booking.findOneAndUpdate(cond, { $set: extra }, { new: true }).lean();
+        if (!booking) {
+          if (extra.checked_in === true && await Booking.exists({ _id: id })) {
+            throw new HttpError(409, 'Only confirmed bookings can be checked in');
+          }
+          throw notFound('Booking not found');
+        }
       }
       return res.status(200).json({ success: true, booking });
     }

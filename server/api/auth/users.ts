@@ -24,6 +24,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const [users, bookingCounts, total] = await Promise.all([
       User.find({}).select('-password -token_version').sort({ created_at: -1, _id: 1 }).skip(skip).limit(limitNum).lean(),
       Booking.aggregate([
+        { $match: { status: { $in: ['confirmed', 'pending'] } } },
         { $group: { _id: '$user_id', count: { $sum: 1 } } },
       ]),
       User.countDocuments({}),

@@ -107,6 +107,16 @@ function authHeader() {
 
 // ── CSV export ─────────────────────────────────────────────────────────────────
 
+// Same guard as server/api/_utils/validate.ts csvCell: a leading = + - @ tab or CR would run as a spreadsheet formula.
+function csvCell(v: unknown): string {
+  let s = String(v ?? "");
+  if (/^[=+\-@\t\r]/.test(s)) s = `'${s}`;
+  return `"${s.replace(/"/g, '""')}"`;
+}
+
+// Date filters are whole days in the admin's timezone; the server needs the offset to place the boundaries.
+const tzOffset = () => String(new Date().getTimezoneOffset());
+
 function exportCSV(bookings: Booking[]) {
   const rows = [
     // Plain numbers, no ₹ symbol — spreadsheets parse the column as currency
@@ -124,7 +134,7 @@ function exportCSV(bookings: Booking[]) {
       fmt(b.created_at),
     ]),
   ];
-  const csv = rows.map((r) => r.map((v) => `"${String(v).replace(/"/g, '""')}"`).join(",")).join("\n");
+  const csv = rows.map((r) => r.map(csvCell).join(",")).join("\n");
   const a = document.createElement("a");
   a.href = URL.createObjectURL(new Blob([csv], { type: "text/csv" }));
   a.download = `bookings-${new Date().toISOString().slice(0, 10)}.csv`;
@@ -172,6 +182,40 @@ export default function AdminBookings() {
 
   // Admin-only: <RequireAdmin> (App.tsx) guards this route, so no page-level redirect here.
 
+  // ── export: every page of the current filters, not just the visible one ──
+  const handleExport = useCallback(async () => {
+    const MAX_ROWS = 5000;
+    setLoading(true);
+    try {
+      const all: Booking[] = [];
+      for (let page = 1; all.length < MAX_ROWS; page++) {
+        const params = new URLSearchParams({ page: String(page), limit: "100" });
+        if (search.trim()) params.set("search", search.trim());
+        if (filterStatus !== "all") params.set("status", filterStatus);
+        if (filterCheckedIn !== "all") params.set("checked_in", filterCheckedIn);
+        if (filterDateFrom) params.set("dateFrom", filterDateFrom);
+        if (filterDateTo) params.set("dateTo", filterDateTo);
+        if (filterDateFrom || filterDateTo) params.set("tz", tzOffset());
+        if (filterEventId) params.set("eventId", filterEventId);
+        const res = await fetch(`/api/admin/bookings-manage?${params}`, {
+          headers: { "Content-Type": "application/json", ...authHeader() },
+        });
+        if (!res.ok) throw new Error((await res.json()).error || "Export failed");
+        const json = await res.json();
+        all.push(...json.data);
+        if (page >= json.pagination.totalPages) break;
+      }
+      exportCSV(all.slice(0, MAX_ROWS));
+      if (all.length >= MAX_ROWS) {
+        toast({ title: "Export truncated", description: `Only the first ${MAX_ROWS} bookings were exported. Narrow the filters for the rest.` });
+      }
+    } catch (err: unknown) {
+      toast({ title: "Error", description: (err as Error).message, variant: "destructive" });
+    } finally {
+      setLoading(false);
+    }
+  }, [search, filterStatus, filterCheckedIn, filterDateFrom, filterDateTo, filterEventId]);
+
   // ── fetch ──────────────────────────────────────────────────────────────────
   const fetchBookings = useCallback(async (page = 1) => {
     setLoading(true);
@@ -182,6 +226,7 @@ export default function AdminBookings() {
       if (filterCheckedIn !== "all") params.set("checked_in", filterCheckedIn);
       if (filterDateFrom) params.set("dateFrom", filterDateFrom);
       if (filterDateTo) params.set("dateTo", filterDateTo);
+      if (filterDateFrom || filterDateTo) params.set("tz", tzOffset());
       if (filterEventId) params.set("eventId", filterEventId);
 
       const res = await fetch(`/api/admin/bookings-manage?${params}`, {
@@ -295,7 +340,7 @@ export default function AdminBookings() {
           </p>
         </div>
         <div className="flex items-center gap-2 shrink-0 w-full sm:w-auto mt-2 sm:mt-0">
-          <Button variant="outline" size="sm" onClick={() => exportCSV(bookings)} disabled={!bookings.length} className="flex-1 sm:flex-none">
+          <Button variant="outline" size="sm" onClick={handleExport} disabled={!bookings.length || loading} className="flex-1 sm:flex-none">
             <Download className="h-4 w-4 mr-2" /> <span className="hidden sm:inline">Export CSV</span><span className="sm:hidden">Export</span>
           </Button>
           <Button variant="outline" size="icon" onClick={() => fetchBookings(pagination.page)} aria-label="Refresh bookings">
